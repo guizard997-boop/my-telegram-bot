@@ -6,19 +6,19 @@ import statistics
 import requests
 from datetime import datetime
 
-# ================== НАСТРОЙКИ ==================
+# ================== НАСТРОЙКИ (МАКСИМАЛЬНО ЖЁСТКИЙ РЕЖИМ) ==================
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 90              # секунд между проверками
-MIN_YEAR = 2012
-WHOLESALE_MARGIN = 0.18          # 18% ниже рынка = целевая скупочная цена
-MIN_SIMILAR_ADS = 5              # минимум похожих объявлений для расчёта
-CITY_ID = 103184                 # Бишкек
+CHECK_INTERVAL = 90
+MIN_YEAR = 2013
+WHOLESALE_MARGIN = 0.27              # 27% ниже рынка — скупочная цель
+MIN_DISCOUNT_TO_NOTIFY = 0.22        # минимум 22% ниже рынка, иначе не шлём
+MIN_SIMILAR_ADS = 8                  # минимум 8 похожих объявлений
+CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
-USD_KGS_RATE = 87.5              # курс (обновляй при необходимости)
+USD_KGS_RATE = 87.5
 
-# Популярные марки
 KNOWN_MAKES = {
     "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
     "mercedes-benz", "audi", "volkswagen", "vw", "ford", "chevrolet", "mazda",
@@ -28,15 +28,14 @@ KNOWN_MAKES = {
     "chery", "haval", "great wall", "byd", "tesla", "porsche", "mini", "daihatsu"
 }
 
-# Слова, по которым отсекаем запчасти и услуги
 JUNK_KEYWORDS = [
     "ремонт", "запчаст", "диск", "диски", "ремень", "турбина", "двигатель",
     "коробка", "акпп", "мкпп", "фара", "бампер", "крыло", "дверь", "капот",
     "стекло", "зеркало", "подшипник", "сайлент", "амортизатор", "стойка",
     "радиатор", "генератор", "стартер", "компрессор", "кондиционер",
-    "шины", "резина", "колесо", "диск", "колпак", "ключ", "замок",
+    "шины", "резина", "колесо", "колпак", "ключ", "замок",
     "сигнализация", "магнитола", "камера", "парктроник", "услуг", "работа",
-    "разбор", "контрактн", "б/у запчаст"
+    "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе"
 ]
 
 HEADERS = {
@@ -140,7 +139,6 @@ def extract_make_model(title):
 
 
 def is_junk_title(title):
-    """Отсекаем запчасти и услуги"""
     if not title:
         return True
     title_lower = title.lower()
@@ -151,10 +149,6 @@ def is_junk_title(title):
 
 
 def get_clean_price_usd(ad):
-    """
-    Надёжно определяет цену в USD.
-    Исправляет самую частую ошибку: продавец указал KGS, а написал долларовую цену.
-    """
     price = ad.get("price")
     if price is None:
         return None
@@ -177,21 +171,14 @@ def get_clean_price_usd(ad):
     else:
         usd = price / USD_KGS_RATE if price > 5000 else price
 
-    # --- Исправление типичной ошибки продавца ---
-    # Указал "сом", но написал число как в долларах (например 11500, 17800)
+    # Частая ошибка: указали сом, а написали долларовую цену
     if is_kgs and 3500 <= price <= 65000:
-        usd = price  # считаем это долларами
+        usd = price
 
-    # --- Финальные проверки ---
-    if usd is None:
+    if usd is None or usd < 2000 or usd > 90000:
         return None
 
-    # Нереальные цены для авто
-    if usd < 1800 or usd > 95000:
-        return None
-
-    # Если остались очень низкие "сомовые" цены — это мусор
-    if is_kgs and price < 90000 and not (3500 <= price <= 65000):
+    if is_kgs and price < 100000 and not (3500 <= price <= 65000):
         return None
 
     return round(usd)
@@ -204,7 +191,7 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
         "expand": "url",
         "sort_by": "newest",
         "city_id": CITY_ID,
-        "category_id": 1501,  # Транспорт
+        "category_id": 1501,
     }
     if q:
         params["q"] = q
@@ -222,24 +209,39 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
         )
         if r.status_code == 200:
             return r.json().get("items", [])
-        else:
-            print(f"Lalafo status: {r.status_code}")
     except Exception as e:
         print("Ошибка запроса к Lalafo:", e)
     return []
 
 
 def remove_outliers(prices):
-    if len(prices) < 4:
+    if len(prices) < 6:
         return prices
     med = statistics.median(prices)
-    filtered = [p for p in prices if med * 0.55 <= p <= med * 1.45]
-    return filtered if len(filtered) >= 3 else prices
+    filtered = [p for p in prices if med * 0.48 <= p <= med * 1.45]
+    return filtered if len(filtered) >= 5 else prices
+
+
+def percentile(data, percent):
+    if not data:
+        return None
+    size = len(data)
+    sorted_data = sorted(data)
+    index = (size - 1) * percent / 100
+    floor = int(index)
+    ceil = min(floor + 1, size - 1)
+    if floor == ceil:
+        return sorted_data[floor]
+    return sorted_data[floor] * (ceil - index) + sorted_data[ceil] * (index - floor)
 
 
 def get_market_price(make, model, year):
+    """
+    Максимально жёсткая оценка для перекупа:
+    берём 25-й перцентиль (очень нижняя часть рынка).
+    """
     if not make:
-        return None, 0
+        return None, 0, None
 
     query = make
     if model:
@@ -250,7 +252,7 @@ def get_market_price(make, model, year):
     year_from = max(year - 2, 1990) if year else None
     year_to = year + 2 if year else None
 
-    items = get_ads(q=query, per_page=50, year_from=year_from, year_to=year_to)
+    items = get_ads(q=query, per_page=70, year_from=year_from, year_to=year_to)
     prices = []
 
     for item in items:
@@ -266,15 +268,19 @@ def get_market_price(make, model, year):
             continue
 
         price = get_clean_price_usd(item)
-        if price and 1800 < price < 95000:
+        if price and 2000 < price < 90000:
             prices.append(price)
 
     prices = remove_outliers(prices)
 
     if len(prices) < MIN_SIMILAR_ADS:
-        return None, len(prices)
+        return None, len(prices), None
 
-    return statistics.median(prices), len(prices)
+    # 25-й перцентиль — очень консервативная оценка рынка
+    market_hard = percentile(prices, 25)
+    market_median = statistics.median(prices)
+
+    return market_hard, len(prices), market_median
 
 
 def analyze_and_notify(ad, seen):
@@ -284,7 +290,6 @@ def analyze_and_notify(ad, seen):
 
     title = ad.get("title") or "Без названия"
 
-    # Отсекаем запчасти и услуги
     if is_junk_title(title):
         seen.add(ad_id)
         return
@@ -300,87 +305,15 @@ def analyze_and_notify(ad, seen):
         return
 
     make, model = extract_make_model(title)
-    market_price, count = get_market_price(make, model, year)
+    market_price, count, market_median = get_market_price(make, model, year)
 
     if not market_price or count < MIN_SIMILAR_ADS:
         seen.add(ad_id)
         return
 
-    # === Цены для перекупа ===
-    asking_price = price_usd
+    asking = price_usd
     wholesale_target = market_price * (1 - WHOLESALE_MARGIN)
-    discount = (market_price - asking_price) / market_price
+    discount = (market_price - asking) / market_price
+    potential_profit = market_price - asking
 
-    # Уведомляем только если цена близка к скупочной или сильно ниже рынка
-    is_good_deal = (
-        asking_price <= wholesale_target * 1.06 or
-        discount >= 0.15
-    )
-
-    if not is_good_deal:
-        seen.add(ad_id)
-        return
-
-    # --- Формируем сообщение ---
-    url = "https://lalafo.kg" + (ad.get("url") or "")
-    city = ad.get("city") or "Бишкек"
-    photo = None
-    if ad.get("images"):
-        photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
-
-    price_kgs = round(asking_price * USD_KGS_RATE)
-    market_kgs = round(market_price * USD_KGS_RATE)
-    wholesale_kgs = round(wholesale_target * USD_KGS_RATE)
-    potential = market_price - asking_price
-
-    text = (
-        f"🔥 <b>Выгодное авто для перекупа</b>\n\n"
-        f"<b>{title}</b>\n"
-        f"📍 {city}\n\n"
-        f"💰 <b>Продажная цена:</b> {price_kgs:,.0f} сом  (\~{asking_price:.0f}$)\n"
-        f"📊 <b>Рыночная цена:</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
-        f"🛒 <b>Скупочная цель (−{WHOLESALE_MARGIN*100:.0f}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
-        f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
-        f"💵 Потенциал: \~{potential:.0f}$\n"
-        f"🔍 Похожих объявлений: {count}\n\n"
-        f"<a href='{url}'>Открыть объявление</a>"
-    )
-
-    send_telegram(text, photo)
-    print(f"[{datetime.now()}] ✅ {title[:50]} | −{discount*100:.1f}% | скупка \~{wholesale_target:.0f}$")
-
-    seen.add(ad_id)
-
-
-def main():
-    if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Ошибка: не заданы BOT_TOKEN или CHAT_ID")
-        return
-
-    print("Бот перекупа запущен...")
-    send_telegram(
-        f"✅ Бот мониторинга Lalafo запущен\n"
-        f"Скупочная маржа: {WHOLESALE_MARGIN*100:.0f}% ниже рынка\n"
-        f"Мин. похожих объявлений: {MIN_SIMILAR_ADS}"
-    )
-
-    seen = load_seen()
-
-    while True:
-        try:
-            print(f"[{datetime.now()}] Проверяю новые объявления...")
-            ads = get_ads(page=1, per_page=40)
-
-            for ad in ads:
-                analyze_and_notify(ad, seen)
-
-            save_seen(seen)
-            time.sleep(CHECK_INTERVAL)
-
-        except Exception as e:
-            print("Ошибка в основном цикле:", e)
-            time.sleep(30)
-
-
-if __name__ == "__main__":
-    main()
+    # Мак
