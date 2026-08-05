@@ -7,11 +7,11 @@ import requests
 from datetime import datetime
 
 # ================== НАСТРОЙКИ ==================
-BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
-CHAT_ID = "8569472160"
+BOT_TOKEN = "8850394642:AAFSVcUFOBE9WdAQxNVdDLzTg7GBpN8x1yc"
+CHAT_ID = "8078921787"
 
 CHECK_INTERVAL = 90
-MIN_YEAR = 1990                  # ← теперь от 1990 года
+MIN_YEAR = 1990
 WHOLESALE_MARGIN = 0.20
 MIN_DISCOUNT_TO_NOTIFY = 0.15
 MIN_SIMILAR_ADS = 5
@@ -30,12 +30,15 @@ KNOWN_MAKES = {
 
 JUNK_KEYWORDS = [
     "ремонт", "запчаст", "диск", "диски", "ремень", "турбина", "двигатель",
-    "коробка", "акпп", "мкпп", "фара", "бампер", "крыло", "дверь", "капот",
+    "коробка", "акпп", "мкпп", "бампер", "крыло", "дверь", "капот",
     "стекло", "зеркало", "подшипник", "сайлент", "амортизатор", "стойка",
     "радиатор", "генератор", "стартер", "компрессор", "кондиционер",
     "шины", "резина", "колесо", "колпак", "ключ", "замок",
     "сигнализация", "магнитола", "камера", "парктроник", "услуг", "работа",
-    "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе"
+    "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе",
+    "фара", "фары", "передняя фара", "задняя фара", "стоп", "стопы",
+    "стоп-сигнал", "стоп сигнал", "задний стоп", "передний стоп",
+    "фонарь", "фонари", "поворотник", "поворотники"
 ]
 
 INSTALLMENT_KEYWORDS = [
@@ -54,6 +57,15 @@ ORDER_KEYWORDS = [
     "пригон", "пригнать", "привезу", "привезем", "можно заказать",
     "заказной", "на заказ из", "авто из китая", "авто из кореи",
     "авто из японии", "авто из сша", "с аукциона", "copart", "iaai", "manheim"
+]
+
+NOT_CLEARED_KEYWORDS = [
+    "не растаможен", "не растаможена", "не растаможено",
+    "без растаможки", "без растамож", "не растаможенная",
+    "не на учете", "не стоит на учете", "на учете не стоит",
+    "временный учет", "временный учёт", "транзит",
+    "не оформлен", "не оформлена", "без птс", "без учёта",
+    "на транзите", "транзитные номера", "временные номера"
 ]
 
 URGENT_KEYWORDS = [
@@ -189,6 +201,14 @@ def is_order_car(title, description=""):
     return False
 
 
+def is_not_cleared(title, description=""):
+    text = (title + " " + (description or "")).lower()
+    for word in NOT_CLEARED_KEYWORDS:
+        if word in text:
+            return True
+    return False
+
+
 def is_urgent(title, description=""):
     text = (title + " " + (description or "")).lower()
     for word in URGENT_KEYWORDS:
@@ -263,10 +283,12 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
 
 
 def remove_outliers(prices):
+    """Сильнее убираем дорогие выбросы"""
     if len(prices) < 5:
         return prices
     med = statistics.median(prices)
-    filtered = [p for p in prices if med * 0.50 <= p <= med * 1.50]
+    # Более жёстко режем верхние цены
+    filtered = [p for p in prices if med * 0.45 <= p <= med * 1.35]
     return filtered if len(filtered) >= 4 else prices
 
 
@@ -320,7 +342,8 @@ def get_market_price(make, model, year):
     if len(prices) < MIN_SIMILAR_ADS:
         return None, len(prices), None
 
-    market_hard = percentile(prices, 30)
+    # 20-й перцентиль — более низкая и реалистичная рыночная цена
+    market_hard = percentile(prices, 20)
     market_median = statistics.median(prices)
 
     return market_hard, len(prices), market_median
@@ -343,6 +366,10 @@ def analyze_and_notify(ad, seen):
         return
 
     if is_order_car(title, description):
+        seen.add(ad_id)
+        return
+
+    if is_not_cleared(title, description):
         seen.add(ad_id)
         return
 
@@ -401,7 +428,7 @@ def analyze_and_notify(ad, seen):
         f"<b>{title}</b>\n"
         f"📍 {city}\n\n"
         f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\~{asking:.0f}$)\n"
-        f"📊 <b>Рыночная (30%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
+        f"📊 <b>Рыночная (20%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
         f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
         f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
         f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
@@ -418,13 +445,12 @@ def analyze_and_notify(ad, seen):
 
 
 def main():
-    print("Бот перекупа запущен (от 1990 года)...")
+    print("Бот перекупа запущен...")
     send_telegram(
         f"✅ <b>Бот обновлён</b>\n\n"
-        f"• Год: <b>от 1990</b>\n"
-        f"• Больше вариантов\n"
-        f"• Отсекает под заказ / Китай / Корею\n"
-        f"• Без рассрочек\n"
+        f"• Рыночная цена снижена (20-й перцентиль)\n"
+        f"• Не кидает фары/стопы\n"
+        f"• Не кидает нерастаможенные\n"
         f"• Скупочная цель: −{int(WHOLESALE_MARGIN*100)}%"
     )
 
