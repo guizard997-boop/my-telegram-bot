@@ -12,9 +12,9 @@ CHAT_ID = "8569472160"
 
 CHECK_INTERVAL = 90
 MIN_YEAR = 2013
-WHOLESALE_MARGIN = 0.27              # 27% ниже рынка — скупочная цель
-MIN_DISCOUNT_TO_NOTIFY = 0.22        # минимум 22% ниже рынка, иначе не шлём
-MIN_SIMILAR_ADS = 8                  # минимум 8 похожих объявлений
+WHOLESALE_MARGIN = 0.27              # 27% ниже рынка
+MIN_DISCOUNT_TO_NOTIFY = 0.22        # минимум 22% скидки
+MIN_SIMILAR_ADS = 8
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
@@ -171,7 +171,7 @@ def get_clean_price_usd(ad):
     else:
         usd = price / USD_KGS_RATE if price > 5000 else price
 
-    # Частая ошибка: указали сом, а написали долларовую цену
+    # Частая ошибка продавцов: указали сом, а написали долларовую цену
     if is_kgs and 3500 <= price <= 65000:
         usd = price
 
@@ -236,10 +236,6 @@ def percentile(data, percent):
 
 
 def get_market_price(make, model, year):
-    """
-    Максимально жёсткая оценка для перекупа:
-    берём 25-й перцентиль (очень нижняя часть рынка).
-    """
     if not make:
         return None, 0, None
 
@@ -276,7 +272,6 @@ def get_market_price(make, model, year):
     if len(prices) < MIN_SIMILAR_ADS:
         return None, len(prices), None
 
-    # 25-й перцентиль — очень консервативная оценка рынка
     market_hard = percentile(prices, 25)
     market_median = statistics.median(prices)
 
@@ -316,4 +311,73 @@ def analyze_and_notify(ad, seen):
     discount = (market_price - asking) / market_price
     potential_profit = market_price - asking
 
-    # Мак
+    is_excellent_deal = (
+        discount >= MIN_DISCOUNT_TO_NOTIFY and
+        asking <= wholesale_target * 1.05
+    )
+
+    if not is_excellent_deal:
+        seen.add(ad_id)
+        return
+
+    url = "https://lalafo.kg" + (ad.get("url") or "")
+    city = ad.get("city") or "Бишкек"
+    photo = None
+    if ad.get("images"):
+        photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
+
+    price_kgs = round(asking * USD_KGS_RATE)
+    market_kgs = round(market_price * USD_KGS_RATE)
+    wholesale_kgs = round(wholesale_target * USD_KGS_RATE)
+    median_kgs = round(market_median * USD_KGS_RATE) if market_median else 0
+
+    text = (
+        f"🔥🔥 <b>ЖИР ДЛЯ ПЕРЕКУПА</b>\n\n"
+        f"<b>{title}</b>\n"
+        f"📍 {city}\n\n"
+        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\~{asking:.0f}$)\n"
+        f"📊 <b>Жёсткая рыночная (25%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
+        f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
+        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
+        f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
+        f"💵 Потенциал: <b>\~{potential_profit:.0f}$</b>\n"
+        f"🔍 Похожих: {count}\n\n"
+        f"<a href='{url}'>Открыть объявление</a>"
+    )
+
+    send_telegram(text, photo)
+    print(f"[{datetime.now()}] 🔥 ЖИР | {title[:45]} | −{discount*100:.1f}% | +{potential_profit:.0f}$")
+
+    seen.add(ad_id)
+
+
+def main():
+    print("Бот перекупа запущен в МАКСИМАЛЬНО ЖЁСТКОМ режиме...")
+    send_telegram(
+        f"✅ <b>Жёсткий режим для перекупа</b>\n\n"
+        f"Скупочная цель: <b>−{int(WHOLESALE_MARGIN*100)}%</b>\n"
+        f"Минимальная скидка: <b>{int(MIN_DISCOUNT_TO_NOTIFY*100)}%</b>\n"
+        f"Мин. похожих объявлений: <b>{MIN_SIMILAR_ADS}</b>\n"
+        f"Рынок считается по 25-му перцентилю"
+    )
+
+    seen = load_seen()
+
+    while True:
+        try:
+            print(f"[{datetime.now()}] Проверяю новые объявления...")
+            ads = get_ads(page=1, per_page=50)
+
+            for ad in ads:
+                analyze_and_notify(ad, seen)
+
+            save_seen(seen)
+            time.sleep(CHECK_INTERVAL)
+
+        except Exception as e:
+            print("Ошибка в основном цикле:", e)
+            time.sleep(30)
+
+
+if __name__ == "__main__":
+    main()
