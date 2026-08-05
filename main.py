@@ -6,15 +6,15 @@ import statistics
 import requests
 from datetime import datetime
 
-# ================== НАСТРОЙКИ (МАКСИМАЛЬНО ЖЁСТКИЙ РЕЖИМ) ==================
+# ================== НАСТРОЙКИ ==================
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 25
-MIN_YEAR = 1995
-WHOLESALE_MARGIN = 0.27
-MIN_DISCOUNT_TO_NOTIFY = 0.22
-MIN_SIMILAR_ADS = 8
+CHECK_INTERVAL = 90
+MIN_YEAR = 1990                  # ← теперь от 1990 года
+WHOLESALE_MARGIN = 0.20
+MIN_DISCOUNT_TO_NOTIFY = 0.15
+MIN_SIMILAR_ADS = 5
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
@@ -28,7 +28,6 @@ KNOWN_MAKES = {
     "chery", "haval", "great wall", "byd", "tesla", "porsche", "mini", "daihatsu"
 }
 
-# Запчасти и услуги
 JUNK_KEYWORDS = [
     "ремонт", "запчаст", "диск", "диски", "ремень", "турбина", "двигатель",
     "коробка", "акпп", "мкпп", "фара", "бампер", "крыло", "дверь", "капот",
@@ -39,7 +38,6 @@ JUNK_KEYWORDS = [
     "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе"
 ]
 
-# Рассрочка, взносы, кредит — полностью отсекаем
 INSTALLMENT_KEYWORDS = [
     "рассрочк", "рассрочка", "первоначальн", "первоначальный взнос",
     "взнос", "в кредит", "кредит", "ежемесячн", "платеж", "платёж",
@@ -48,7 +46,16 @@ INSTALLMENT_KEYWORDS = [
     "без первоначального", "без взноса"
 ]
 
-# Срочность — приоритет
+ORDER_KEYWORDS = [
+    "под заказ", "подзаказ", "на заказ", "заказ из", "заказать",
+    "из китая", "из кореи", "из японии", "из оаэ", "из дубая",
+    "из сша", "из америки", "из европы", "в пути", "едет",
+    "ожидается", "ожидание", "прибудет", "приход", "доставка из",
+    "пригон", "пригнать", "привезу", "привезем", "можно заказать",
+    "заказной", "на заказ из", "авто из китая", "авто из кореи",
+    "авто из японии", "авто из сша", "с аукциона", "copart", "iaai", "manheim"
+]
+
 URGENT_KEYWORDS = [
     "срочно", "срочная продажа", "срочно продаю", "срочн",
     "цена снижена", "снизил цену", "торг реальному", "торг уместен",
@@ -167,7 +174,6 @@ def is_junk_title(title):
 
 
 def is_installment(title, description=""):
-    """Отсекаем рассрочку, взносы, кредит"""
     text = (title + " " + (description or "")).lower()
     for word in INSTALLMENT_KEYWORDS:
         if word in text:
@@ -175,8 +181,15 @@ def is_installment(title, description=""):
     return False
 
 
+def is_order_car(title, description=""):
+    text = (title + " " + (description or "")).lower()
+    for word in ORDER_KEYWORDS:
+        if word in text:
+            return True
+    return False
+
+
 def is_urgent(title, description=""):
-    """Проверяем срочность"""
     text = (title + " " + (description or "")).lower()
     for word in URGENT_KEYWORDS:
         if word in text:
@@ -210,10 +223,10 @@ def get_clean_price_usd(ad):
     if is_kgs and 3500 <= price <= 65000:
         usd = price
 
-    if usd is None or usd < 2000 or usd > 90000:
+    if usd is None or usd < 1500 or usd > 90000:
         return None
 
-    if is_kgs and price < 100000 and not (3500 <= price <= 65000):
+    if is_kgs and price < 80000 and not (3500 <= price <= 65000):
         return None
 
     return round(usd)
@@ -250,11 +263,11 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
 
 
 def remove_outliers(prices):
-    if len(prices) < 6:
+    if len(prices) < 5:
         return prices
     med = statistics.median(prices)
-    filtered = [p for p in prices if med * 0.48 <= p <= med * 1.45]
-    return filtered if len(filtered) >= 5 else prices
+    filtered = [p for p in prices if med * 0.50 <= p <= med * 1.50]
+    return filtered if len(filtered) >= 4 else prices
 
 
 def percentile(data, percent):
@@ -280,10 +293,10 @@ def get_market_price(make, model, year):
         if len(first_model) > 1:
             query += " " + first_model
 
-    year_from = max(year - 2, 1990) if year else None
-    year_to = year + 2 if year else None
+    year_from = max(year - 3, 1985) if year else None
+    year_to = year + 3 if year else None
 
-    items = get_ads(q=query, per_page=70, year_from=year_from, year_to=year_to)
+    items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
     prices = []
 
     for item in items:
@@ -291,7 +304,7 @@ def get_market_price(make, model, year):
             continue
 
         item_year = extract_year(item.get("title", ""))
-        if year and item_year and abs(item_year - year) > 2:
+        if year and item_year and abs(item_year - year) > 3:
             continue
 
         item_make, _ = extract_make_model(item.get("title", ""))
@@ -299,7 +312,7 @@ def get_market_price(make, model, year):
             continue
 
         price = get_clean_price_usd(item)
-        if price and 2000 < price < 90000:
+        if price and 1500 < price < 90000:
             prices.append(price)
 
     prices = remove_outliers(prices)
@@ -307,7 +320,7 @@ def get_market_price(make, model, year):
     if len(prices) < MIN_SIMILAR_ADS:
         return None, len(prices), None
 
-    market_hard = percentile(prices, 25)
+    market_hard = percentile(prices, 30)
     market_median = statistics.median(prices)
 
     return market_hard, len(prices), market_median
@@ -321,13 +334,15 @@ def analyze_and_notify(ad, seen):
     title = ad.get("title") or "Без названия"
     description = ad.get("description") or ""
 
-    # 1. Отсекаем запчасти
     if is_junk_title(title):
         seen.add(ad_id)
         return
 
-    # 2. Отсекаем рассрочку / взносы / кредит
     if is_installment(title, description):
+        seen.add(ad_id)
+        return
+
+    if is_order_car(title, description):
         seen.add(ad_id)
         return
 
@@ -355,14 +370,12 @@ def analyze_and_notify(ad, seen):
 
     urgent = is_urgent(title, description)
 
-    # Жёсткое условие + бонус за срочность
     is_excellent_deal = (
         discount >= MIN_DISCOUNT_TO_NOTIFY and
-        asking <= wholesale_target * 1.05
+        asking <= wholesale_target * 1.08
     )
 
-    # Срочные объявления пропускаем чуть легче (скидка от 18%)
-    if urgent and discount >= 0.18:
+    if urgent and discount >= 0.12:
         is_excellent_deal = True
 
     if not is_excellent_deal:
@@ -384,11 +397,11 @@ def analyze_and_notify(ad, seen):
 
     text = (
         f"{urgent_mark}"
-        f"🔥🔥 <b>ЖИР ДЛЯ ПЕРЕКУПА</b>\n\n"
+        f"🔥 <b>ВЫГОДНО ДЛЯ ПЕРЕКУПА</b>\n\n"
         f"<b>{title}</b>\n"
         f"📍 {city}\n\n"
         f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\~{asking:.0f}$)\n"
-        f"📊 <b>Жёсткая рыночная (25%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
+        f"📊 <b>Рыночная (30%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
         f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
         f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
         f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
@@ -398,20 +411,21 @@ def analyze_and_notify(ad, seen):
     )
 
     send_telegram(text, photo)
-    status = "СРОЧНО" if urgent else "ЖИР"
+    status = "СРОЧНО" if urgent else "ВЫГОДНО"
     print(f"[{datetime.now()}] 🔥 {status} | {title[:45]} | −{discount*100:.1f}% | +{potential_profit:.0f}$")
 
     seen.add(ad_id)
 
 
 def main():
-    print("Бот перекупа запущен (жёсткий режим + срочные + без рассрочек)...")
+    print("Бот перекупа запущен (от 1990 года)...")
     send_telegram(
-        f"✅ <b>Бот для перекупа обновлён</b>\n\n"
-        f"• Приоритет: <b>срочные объявления</b>\n"
-        f"• Рассрочка и взносы — <b>отсекаются</b>\n"
-        f"• Скупочная цель: <b>−{int(WHOLESALE_MARGIN*100)}%</b>\n"
-        f"• Мин. скидка: <b>{int(MIN_DISCOUNT_TO_NOTIFY*100)}%</b>"
+        f"✅ <b>Бот обновлён</b>\n\n"
+        f"• Год: <b>от 1990</b>\n"
+        f"• Больше вариантов\n"
+        f"• Отсекает под заказ / Китай / Корею\n"
+        f"• Без рассрочек\n"
+        f"• Скупочная цель: −{int(WHOLESALE_MARGIN*100)}%"
     )
 
     seen = load_seen()
@@ -421,7 +435,6 @@ def main():
             print(f"[{datetime.now()}] Проверяю новые объявления...")
             ads = get_ads(page=1, per_page=50)
 
-            # Сначала обрабатываем срочные
             urgent_ads = []
             normal_ads = []
 
@@ -433,7 +446,6 @@ def main():
                 else:
                     normal_ads.append(ad)
 
-            # Сначала срочные, потом обычные
             for ad in urgent_ads + normal_ads:
                 analyze_and_notify(ad, seen)
 
