@@ -12,8 +12,8 @@ CHAT_ID = "8569472160"
 
 CHECK_INTERVAL = 90
 MIN_YEAR = 2013
-WHOLESALE_MARGIN = 0.27              # 27% ниже рынка
-MIN_DISCOUNT_TO_NOTIFY = 0.22        # минимум 22% скидки
+WHOLESALE_MARGIN = 0.27
+MIN_DISCOUNT_TO_NOTIFY = 0.22
 MIN_SIMILAR_ADS = 8
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
@@ -28,6 +28,7 @@ KNOWN_MAKES = {
     "chery", "haval", "great wall", "byd", "tesla", "porsche", "mini", "daihatsu"
 }
 
+# Запчасти и услуги
 JUNK_KEYWORDS = [
     "ремонт", "запчаст", "диск", "диски", "ремень", "турбина", "двигатель",
     "коробка", "акпп", "мкпп", "фара", "бампер", "крыло", "дверь", "капот",
@@ -36,6 +37,23 @@ JUNK_KEYWORDS = [
     "шины", "резина", "колесо", "колпак", "ключ", "замок",
     "сигнализация", "магнитола", "камера", "парктроник", "услуг", "работа",
     "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе"
+]
+
+# Рассрочка, взносы, кредит — полностью отсекаем
+INSTALLMENT_KEYWORDS = [
+    "рассрочк", "рассрочка", "первоначальн", "первоначальный взнос",
+    "взнос", "в кредит", "кредит", "ежемесячн", "платеж", "платёж",
+    "лизинг", "в месяц", "по месяц", "оплата частями", "частями",
+    "первый взнос", "перв. взнос", "пв ", " пв", "0-0-24", "0-0-12",
+    "без первоначального", "без взноса"
+]
+
+# Срочность — приоритет
+URGENT_KEYWORDS = [
+    "срочно", "срочная продажа", "срочно продаю", "срочн",
+    "цена снижена", "снизил цену", "торг реальному", "торг уместен",
+    "ниже рынка", "отдам дешево", "отдам дёшево", "быстро продам",
+    "нужны деньги", "срочный выкуп", "сегодня", "только сегодня"
 ]
 
 HEADERS = {
@@ -148,6 +166,24 @@ def is_junk_title(title):
     return False
 
 
+def is_installment(title, description=""):
+    """Отсекаем рассрочку, взносы, кредит"""
+    text = (title + " " + (description or "")).lower()
+    for word in INSTALLMENT_KEYWORDS:
+        if word in text:
+            return True
+    return False
+
+
+def is_urgent(title, description=""):
+    """Проверяем срочность"""
+    text = (title + " " + (description or "")).lower()
+    for word in URGENT_KEYWORDS:
+        if word in text:
+            return True
+    return False
+
+
 def get_clean_price_usd(ad):
     price = ad.get("price")
     if price is None:
@@ -171,7 +207,6 @@ def get_clean_price_usd(ad):
     else:
         usd = price / USD_KGS_RATE if price > 5000 else price
 
-    # Частая ошибка продавцов: указали сом, а написали долларовую цену
     if is_kgs and 3500 <= price <= 65000:
         usd = price
 
@@ -284,8 +319,15 @@ def analyze_and_notify(ad, seen):
         return
 
     title = ad.get("title") or "Без названия"
+    description = ad.get("description") or ""
 
+    # 1. Отсекаем запчасти
     if is_junk_title(title):
+        seen.add(ad_id)
+        return
+
+    # 2. Отсекаем рассрочку / взносы / кредит
+    if is_installment(title, description):
         seen.add(ad_id)
         return
 
@@ -311,10 +353,17 @@ def analyze_and_notify(ad, seen):
     discount = (market_price - asking) / market_price
     potential_profit = market_price - asking
 
+    urgent = is_urgent(title, description)
+
+    # Жёсткое условие + бонус за срочность
     is_excellent_deal = (
         discount >= MIN_DISCOUNT_TO_NOTIFY and
         asking <= wholesale_target * 1.05
     )
+
+    # Срочные объявления пропускаем чуть легче (скидка от 18%)
+    if urgent and discount >= 0.18:
+        is_excellent_deal = True
 
     if not is_excellent_deal:
         seen.add(ad_id)
@@ -331,7 +380,10 @@ def analyze_and_notify(ad, seen):
     wholesale_kgs = round(wholesale_target * USD_KGS_RATE)
     median_kgs = round(market_median * USD_KGS_RATE) if market_median else 0
 
+    urgent_mark = "⚡ <b>СРОЧНО!</b>\n\n" if urgent else ""
+
     text = (
+        f"{urgent_mark}"
         f"🔥🔥 <b>ЖИР ДЛЯ ПЕРЕКУПА</b>\n\n"
         f"<b>{title}</b>\n"
         f"📍 {city}\n\n"
@@ -346,19 +398,20 @@ def analyze_and_notify(ad, seen):
     )
 
     send_telegram(text, photo)
-    print(f"[{datetime.now()}] 🔥 ЖИР | {title[:45]} | −{discount*100:.1f}% | +{potential_profit:.0f}$")
+    status = "СРОЧНО" if urgent else "ЖИР"
+    print(f"[{datetime.now()}] 🔥 {status} | {title[:45]} | −{discount*100:.1f}% | +{potential_profit:.0f}$")
 
     seen.add(ad_id)
 
 
 def main():
-    print("Бот перекупа запущен в МАКСИМАЛЬНО ЖЁСТКОМ режиме...")
+    print("Бот перекупа запущен (жёсткий режим + срочные + без рассрочек)...")
     send_telegram(
-        f"✅ <b>Жёсткий режим для перекупа</b>\n\n"
-        f"Скупочная цель: <b>−{int(WHOLESALE_MARGIN*100)}%</b>\n"
-        f"Минимальная скидка: <b>{int(MIN_DISCOUNT_TO_NOTIFY*100)}%</b>\n"
-        f"Мин. похожих объявлений: <b>{MIN_SIMILAR_ADS}</b>\n"
-        f"Рынок считается по 25-му перцентилю"
+        f"✅ <b>Бот для перекупа обновлён</b>\n\n"
+        f"• Приоритет: <b>срочные объявления</b>\n"
+        f"• Рассрочка и взносы — <b>отсекаются</b>\n"
+        f"• Скупочная цель: <b>−{int(WHOLESALE_MARGIN*100)}%</b>\n"
+        f"• Мин. скидка: <b>{int(MIN_DISCOUNT_TO_NOTIFY*100)}%</b>"
     )
 
     seen = load_seen()
@@ -368,7 +421,20 @@ def main():
             print(f"[{datetime.now()}] Проверяю новые объявления...")
             ads = get_ads(page=1, per_page=50)
 
+            # Сначала обрабатываем срочные
+            urgent_ads = []
+            normal_ads = []
+
             for ad in ads:
+                title = ad.get("title") or ""
+                desc = ad.get("description") or ""
+                if is_urgent(title, desc):
+                    urgent_ads.append(ad)
+                else:
+                    normal_ads.append(ad)
+
+            # Сначала срочные, потом обычные
+            for ad in urgent_ads + normal_ads:
                 analyze_and_notify(ad, seen)
 
             save_seen(seen)
