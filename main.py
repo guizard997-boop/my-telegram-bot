@@ -1,8 +1,7 @@
 import asyncio
 import logging
-import os
 import re
-from typing import Dict, Any, Set
+from typing import Set
 import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -15,7 +14,7 @@ BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 ADMIN_ID = 630689571
 TARGET_CHAT_ID = 630689571
 EXCHANGE_RATE = 87.5
-CHECK_INTERVAL = 70  # секунд между проверками
+CHECK_INTERVAL = 70  # секунд
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,8 +22,8 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Уже отправленные объявления (чтобы не дублировать)
 seen_ids: Set[int] = set()
+first_run = True
 
 # ====================== ФИЛЬТР ======================
 
@@ -57,7 +56,6 @@ def is_allowed_car(title: str, description: str = "") -> bool:
 # ====================== ПАРСИНГ LALAFO ======================
 
 def fetch_lalafo(query: str) -> list:
-    """Получаем объявления с Lalafo по запросу"""
     url = "https://lalafo.kg/api/search/v3/feed/search"
     params = {
         "expand": "url",
@@ -69,18 +67,16 @@ def fetch_lalafo(query: str) -> list:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json",
     }
-
     try:
         r = requests.get(url, params=params, headers=headers, timeout=15)
         r.raise_for_status()
-        data = r.json()
-        return data.get("items", [])
+        return r.json().get("items", [])
     except Exception as e:
-        logger.error(f"Ошибка парсинга Lalafo ({query}): {e}")
+        logger.error(f"Ошибка Lalafo ({query}): {e}")
         return []
 
 async def check_new_ads():
-    """Проверяем новые объявления"""
+    global first_run
     queries = ["BYD Song Plus", "Kia Sportage", "БИД Сонг Плюс", "Киа Спортейдж"]
 
     for query in queries:
@@ -99,7 +95,12 @@ async def check_new_ads():
             if not is_allowed_car(title, description):
                 continue
 
-            # Формируем цену
+            # Первый запуск — только запоминаем ID
+            if first_run:
+                seen_ids.add(ad_id)
+                continue
+
+            # Отправка нового объявления
             try:
                 price_num = float(price) if price else 0
                 price_text = f"{price_num:,.0f} сом (\~{price_num / EXCHANGE_RATE:.0f}$)"
@@ -121,7 +122,11 @@ async def check_new_ads():
             except Exception as e:
                 logger.error(f"Ошибка отправки: {e}")
 
-        await asyncio.sleep(1)  # небольшая пауза между запросами
+        await asyncio.sleep(1)
+
+    if first_run:
+        first_run = False
+        logger.info(f"Первый запуск. Запомнено объявлений: {len(seen_ids)}")
 
 # ====================== ФОНОВАЯ ЗАДАЧА ======================
 
@@ -131,7 +136,7 @@ async def monitoring_loop():
         try:
             await check_new_ads()
         except Exception as e:
-            logger.error(f"Ошибка в цикле мониторинга: {e}")
+            logger.error(f"Ошибка мониторинга: {e}")
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ====================== КОМАНДЫ ======================
@@ -140,11 +145,7 @@ async def monitoring_loop():
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer(
-        "Бот работает.\n"
-        "Ищет: <b>BYD Song Plus</b> и <b>Kia Sportage</b>\n"
-        f"Проверка каждые {CHECK_INTERVAL} сек."
-    )
+    await message.answer("Бот работает.\nИщет: <b>BYD Song Plus</b> и <b>Kia Sportage</b>")
 
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
@@ -155,7 +156,13 @@ async def cmd_status(message: types.Message):
 # ====================== ЗАПУСК ======================
 
 async def main():
-    # Запускаем мониторинг в фоне
+    # Приветствие при запуске
+    try:
+        await bot.send_message(TARGET_CHAT_ID, "Здравствуйте сер рад служить")
+    except Exception as e:
+        logger.error(f"Не удалось отправить приветствие: {e}")
+
+    # Запускаем мониторинг
     asyncio.create_task(monitoring_loop())
     logger.info("Бот запущен")
     await dp.start_polling(bot)
