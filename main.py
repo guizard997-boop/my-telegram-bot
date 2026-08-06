@@ -23,7 +23,6 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 
 seen_ids: Set[int] = set()
-first_run = True
 
 # ====================== ФИЛЬТР ======================
 
@@ -38,7 +37,6 @@ def is_allowed_car(title: str, description: str = "") -> bool:
         if kw in text:
             return True
 
-    # fuzzy на всякий случай
     for model in ["byd song plus", "киа спортейдж", "kia sportage"]:
         if fuzz.partial_ratio(model, text) >= 78:
             return True
@@ -57,36 +55,34 @@ def fetch_lalafo(query: str) -> list:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9",
         "Origin": "https://lalafo.kg",
         "Referer": "https://lalafo.kg/",
     }
     try:
         r = requests.get(url, params=params, headers=headers, timeout=20)
-        logger.info(f"Lalafo [{query}] → status {r.status_code}")
+        logger.info(f"Lalafo [{query}] → {r.status_code}")
         if r.status_code != 200:
-            logger.error(f"Ответ: {r.text[:300]}")
+            logger.error(r.text[:300])
             return []
         data = r.json()
         items = data.get("items") or data.get("data", {}).get("items") or []
-        logger.info(f"Lalafo [{query}] → найдено {len(items)} объявлений")
+        logger.info(f"Lalafo [{query}] → {len(items)} шт.")
         return items
     except Exception as e:
         logger.error(f"Ошибка Lalafo ({query}): {e}")
         return []
 
-async def check_new_ads(force_send: bool = False):
-    global first_run
+async def check_new_ads():
     queries = ["BYD Song Plus", "Kia Sportage", "БИД Сонг Плюс", "Киа Спортейдж", "Song Plus", "Спортейдж"]
 
-    total_found = 0
-    total_new = 0
+    total_sent = 0
 
     for query in queries:
         items = fetch_lalafo(query)
         for item in items:
             ad_id = item.get("id")
-            if not ad_id:
+            if not ad_id or ad_id in seen_ids:
                 continue
 
             title = item.get("title") or ""
@@ -99,17 +95,7 @@ async def check_new_ads(force_send: bool = False):
             if not is_allowed_car(title, description):
                 continue
 
-            total_found += 1
-
-            if ad_id in seen_ids and not force_send:
-                continue
-
-            # Первый запуск — только запоминаем
-            if first_run and not force_send:
-                seen_ids.add(ad_id)
-                continue
-
-            # Отправляем
+            # Отправляем сразу все подходящие
             try:
                 price_num = float(price) if price else 0
                 price_text = f"{price_num:,.0f} сом (\~{price_num / EXCHANGE_RATE:.0f}$)"
@@ -127,30 +113,30 @@ async def check_new_ads(force_send: bool = False):
             try:
                 await bot.send_message(TARGET_CHAT_ID, text)
                 seen_ids.add(ad_id)
-                total_new += 1
+                total_sent += 1
                 logger.info(f"[SENT] {title[:70]}")
+                await asyncio.sleep(0.7)  # чтобы не спамить слишком быстро
             except Exception as e:
                 logger.error(f"Ошибка отправки: {e}")
 
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(1.2)
 
-    if first_run and not force_send:
-        first_run = False
-        logger.info(f"Первый запуск завершён. Запомнено: {len(seen_ids)}")
-
-    return total_found, total_new
+    logger.info(f"Отправлено в этом цикле: {total_sent}")
+    return total_sent
 
 # ====================== ФОНОВАЯ ЗАДАЧА ======================
 
 async def monitoring_loop():
     logger.info("Мониторинг запущен")
+    # Сразу при старте кидаем все текущие объявления
+    await check_new_ads()
+
     while True:
+        await asyncio.sleep(CHECK_INTERVAL)
         try:
-            found, new = await check_new_ads()
-            logger.info(f"Проверка: найдено подходящих {found}, новых отправлено {new}")
+            await check_new_ads()
         except Exception as e:
             logger.error(f"Ошибка цикла: {e}")
-        await asyncio.sleep(CHECK_INTERVAL)
 
 # ====================== КОМАНДЫ ======================
 
@@ -158,22 +144,21 @@ async def monitoring_loop():
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Бот работает.\nИщет BYD Song Plus и Kia Sportage")
+    await message.answer("Бот работает. Кидает все текущие + новые объявления.")
 
 @dp.message(Command("check"))
 async def cmd_check(message: types.Message):
-    """Принудительная проверка + отправка"""
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Проверяю Lalafo...")
-    found, new = await check_new_ads(force_send=True)
-    await message.answer(f"Найдено подходящих: <b>{found}</b>\nОтправлено новых: <b>{new}</b>")
+    await message.answer("Проверяю и отправляю все объявления...")
+    sent = await check_new_ads()
+    await message.answer(f"Отправлено: <b>{sent}</b>")
 
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer(f"В памяти объявлений: <b>{len(seen_ids)}</b>\nПервый запуск: <b>{first_run}</b>")
+    await message.answer(f"Уже отправлено уникальных: <b>{len(seen_ids)}</b>")
 
 # ====================== ЗАПУСК ======================
 
@@ -181,7 +166,7 @@ async def main():
     try:
         await bot.send_message(TARGET_CHAT_ID, "Здравствуйте сер рад служить")
     except Exception as e:
-        logger.error(f"Приветствие не отправилось: {e}")
+        logger.error(f"Приветствие: {e}")
 
     asyncio.create_task(monitoring_loop())
     logger.info("Бот запущен")
