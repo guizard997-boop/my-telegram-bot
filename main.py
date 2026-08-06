@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import re
-from typing import Set
 import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -14,15 +13,13 @@ BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 ADMIN_ID = 630689571
 TARGET_CHAT_ID = 630689571
 EXCHANGE_RATE = 87.5
-CHECK_INTERVAL = 60
+CHECK_INTERVAL = 30  # каждые 30 секунд
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-
-seen_ids: Set[int] = set()
 
 # ====================== ФИЛЬТР ======================
 
@@ -54,16 +51,15 @@ def fetch_lalafo(query: str) -> list:
     }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "application/json",
         "Accept-Language": "ru-RU,ru;q=0.9",
         "Origin": "https://lalafo.kg",
         "Referer": "https://lalafo.kg/",
     }
     try:
         r = requests.get(url, params=params, headers=headers, timeout=20)
-        logger.info(f"Lalafo [{query}] → {r.status_code}")
         if r.status_code != 200:
-            logger.error(r.text[:300])
+            logger.error(f"Lalafo [{query}] status {r.status_code}")
             return []
         data = r.json()
         items = data.get("items") or data.get("data", {}).get("items") or []
@@ -73,16 +69,17 @@ def fetch_lalafo(query: str) -> list:
         logger.error(f"Ошибка Lalafo ({query}): {e}")
         return []
 
-async def check_new_ads():
+async def send_all_ads():
+    """Кидает ВСЕ текущие объявления"""
     queries = ["BYD Song Plus", "Kia Sportage", "БИД Сонг Плюс", "Киа Спортейдж", "Song Plus", "Спортейдж"]
-
     total_sent = 0
+    already_sent_in_this_cycle = set()
 
     for query in queries:
         items = fetch_lalafo(query)
         for item in items:
             ad_id = item.get("id")
-            if not ad_id or ad_id in seen_ids:
+            if not ad_id or ad_id in already_sent_in_this_cycle:
                 continue
 
             title = item.get("title") or ""
@@ -95,7 +92,6 @@ async def check_new_ads():
             if not is_allowed_car(title, description):
                 continue
 
-            # Отправляем сразу все подходящие
             try:
                 price_num = float(price) if price else 0
                 price_text = f"{price_num:,.0f} сом (\~{price_num / EXCHANGE_RATE:.0f}$)"
@@ -112,31 +108,28 @@ async def check_new_ads():
 
             try:
                 await bot.send_message(TARGET_CHAT_ID, text)
-                seen_ids.add(ad_id)
+                already_sent_in_this_cycle.add(ad_id)
                 total_sent += 1
                 logger.info(f"[SENT] {title[:70]}")
-                await asyncio.sleep(0.7)  # чтобы не спамить слишком быстро
+                await asyncio.sleep(0.6)
             except Exception as e:
                 logger.error(f"Ошибка отправки: {e}")
 
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(1)
 
-    logger.info(f"Отправлено в этом цикле: {total_sent}")
+    logger.info(f"Цикл завершён. Отправлено: {total_sent}")
     return total_sent
 
 # ====================== ФОНОВАЯ ЗАДАЧА ======================
 
 async def monitoring_loop():
-    logger.info("Мониторинг запущен")
-    # Сразу при старте кидаем все текущие объявления
-    await check_new_ads()
-
+    logger.info("Мониторинг запущен (каждые 30 сек кидает все объявления)")
     while True:
-        await asyncio.sleep(CHECK_INTERVAL)
         try:
-            await check_new_ads()
+            await send_all_ads()
         except Exception as e:
             logger.error(f"Ошибка цикла: {e}")
+        await asyncio.sleep(CHECK_INTERVAL)
 
 # ====================== КОМАНДЫ ======================
 
@@ -144,21 +137,15 @@ async def monitoring_loop():
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Бот работает. Кидает все текущие + новые объявления.")
+    await message.answer("Бот работает.\nКаждые 30 секунд кидает все текущие объявления.")
 
 @dp.message(Command("check"))
 async def cmd_check(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Проверяю и отправляю все объявления...")
-    sent = await check_new_ads()
+    await message.answer("Отправляю все объявления сейчас...")
+    sent = await send_all_ads()
     await message.answer(f"Отправлено: <b>{sent}</b>")
-
-@dp.message(Command("status"))
-async def cmd_status(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer(f"Уже отправлено уникальных: <b>{len(seen_ids)}</b>")
 
 # ====================== ЗАПУСК ======================
 
