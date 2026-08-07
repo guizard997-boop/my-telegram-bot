@@ -10,7 +10,7 @@ from datetime import datetime
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 30          # ← каждые 30 секунд
+CHECK_INTERVAL = 90
 MIN_YEAR = 1990
 WHOLESALE_MARGIN = 0.20
 MIN_DISCOUNT_TO_NOTIFY = 0.15
@@ -18,9 +18,6 @@ MIN_SIMILAR_ADS = 5
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
-
-# Только эти марки
-ALLOWED_MAKES = {"byd", "kia"}
 
 KNOWN_MAKES = {
     "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
@@ -392,12 +389,6 @@ def analyze_and_notify(ad, seen):
         return
 
     make, model = extract_make_model(title)
-
-    # ← ТОЛЬКО BYD и KIA
-    if not make or make not in ALLOWED_MAKES:
-        seen.add(ad_id)
-        return
-
     market_price, count, market_median = get_market_price(make, model, year)
 
     if not market_price or count < MIN_SIMILAR_ADS:
@@ -441,12 +432,12 @@ def analyze_and_notify(ad, seen):
         f"🔥 <b>ВЫГОДНО ДЛЯ ПЕРЕКУПА</b>\n\n"
         f"<b>{title}</b>\n"
         f"📍 {city}\n\n"
-        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\\~{asking:.0f}$)\n"
-        f"📊 <b>Рыночная (20%):</b> \\~{market_kgs:,.0f} сом  (\\~{market_price:.0f}$)\n"
-        f"📈 Медиана: \\~{median_kgs:,.0f} сом\n"
-        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \\~{wholesale_kgs:,.0f} сом  (\\~{wholesale_target:.0f}$)\n\n"
+        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\~{asking:.0f}$)\n"
+        f"📊 <b>Рыночная (20%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
+        f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
+        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
         f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
-        f"💵 Потенциал: <b>\\~{potential_profit:.0f}$</b>\n"
+        f"💵 Потенциал: <b>\~{potential_profit:.0f}$</b>\n"
         f"🔍 Похожих: {count}\n\n"
         f"<a href='{url}'>Открыть объявление</a>"
     )
@@ -459,11 +450,9 @@ def analyze_and_notify(ad, seen):
 
 
 def main():
-    print("Бот перекупа запущен (только BYD + KIA, интервал 30 сек)...")
+    print("Бот перекупа запущен...")
     send_telegram(
         f"✅ <b>Бот обновлён</b>\n\n"
-        f"• Только <b>BYD</b> и <b>KIA</b>\n"
-        f"• Проверка каждые 30 секунд\n"
         f"• Жёстко отсекает запчасти\n"
         f"• Нерастаможенные — нет\n"
         f"• Под заказ / Китай / Корея — нет\n"
@@ -476,7 +465,7 @@ def main():
 
     while True:
         try:
-            print(f"[{datetime.now()}] Проверяю новые объявления (BYD + KIA)...")
+            print(f"[{datetime.now()}] Проверяю новые объявления...")
             ads = get_ads(page=1, per_page=50)
 
             urgent_ads = []
