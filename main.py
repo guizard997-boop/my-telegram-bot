@@ -10,23 +10,19 @@ from datetime import datetime
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 90
-MIN_YEAR = 1990
-WHOLESALE_MARGIN = 0.20
-MIN_DISCOUNT_TO_NOTIFY = 0.15
-MIN_SIMILAR_ADS = 5
+CHECK_INTERVAL = 30          # каждые 30 секунд
+MIN_YEAR = 2015
+MIN_DISCOUNT_TO_NOTIFY = 0.08  # уже 8% ниже рынка — кидает
+MIN_SIMILAR_ADS = 3
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
 
-KNOWN_MAKES = {
-    "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
-    "mercedes-benz", "audi", "volkswagen", "vw", "ford", "chevrolet", "mazda",
-    "subaru", "mitsubishi", "suzuki", "opel", "skoda", "renault", "peugeot",
-    "citroen", "volvo", "land rover", "range rover", "jeep", "dodge", "chrysler",
-    "infiniti", "acura", "genesis", "ssangyong", "daewoo", "ravon", "geely",
-    "chery", "haval", "great wall", "byd", "tesla", "porsche", "mini", "daihatsu"
-}
+# Только эти марки
+ALLOWED_MAKES = {"byd", "kia"}
+
+# Категории машин на Lalafo
+CAR_CATEGORIES = [1576, 1543]  # обычные авто + электро/BYD
 
 JUNK_KEYWORDS = [
     "ремонт", "запчаст", "запчасти", "диск", "диски", "ремень", "турбина",
@@ -36,51 +32,39 @@ JUNK_KEYWORDS = [
     "компрессор", "кондиционер", "шины", "резина", "колесо", "колпак",
     "ключ", "замок", "сигнализация", "магнитола", "камера", "парктроник",
     "услуг", "работа", "разбор", "контрактн", "б/у запчаст", "в разборе",
-    "фара", "фары", "стоп", "стопы", "стоп-сигнал", "фонарь", "фонари",
-    "поворотник", "поворотники", "комплект передних фар", "оптика",
-    "лямбда", "лямбда-зонд", "зонд", "гбц", "головка блока", "блок цилиндров",
-    "поршень", "клапан", "распредвал", "коленвал", "маховик", "форсунка",
-    "инжектор", "насос", "термостат", "патрубок", "коллектор",
-    "обшивка", "обшивк", "багажник", "обшивка багажника", "торпедо",
-    "панель", "сиденье", "кресло", "руль", "консоль", "подлокотник",
-    "переднее правое", "переднее левое", "заднее правое", "заднее левое",
-    "крышка багажника", "катализатор", "глушитель", "резонатор",
-    "сцепление", "диск сцепления", "ступица", "рычаг", "шаровая",
-    "наконечник", "тяга", "стабилизатор", "пружина", "отбойник", "пылезащит", "пыльник"
+    "фара", "фары", "стоп", "стопы", "фонарь", "поворотник", "оптика",
+    "лямбда", "гбц", "головка блока", "поршень", "клапан", "форсунка",
+    "насос", "термостат", "обшивка", "сиденье", "кресло", "руль",
+    "крышка багажника", "катализатор", "глушитель", "сцепление",
+    "ступица", "рычаг", "шаровая", "наконечник", "тяга", "пружина",
+    "трапеция", "решетка", "решётка", "дворник"
 ]
 
 INSTALLMENT_KEYWORDS = [
-    "рассрочк", "рассрочка", "первоначальн", "первоначальный взнос",
-    "взнос", "в кредит", "кредит", "ежемесячн", "платеж", "платёж",
-    "лизинг", "в месяц", "по месяц", "оплата частями", "частями",
-    "первый взнос", "перв. взнос", "пв ", " пв", "0-0-24", "0-0-12",
-    "без первоначального", "без взноса"
+    "рассрочк", "рассрочка", "первоначальн", "взнос", "в кредит", "кредит",
+    "ежемесячн", "платеж", "платёж", "лизинг", "в месяц", "частями",
+    "первый взнос", "пв ", "0-0-24", "0-0-12", "без первоначального"
 ]
 
 ORDER_KEYWORDS = [
     "под заказ", "подзаказ", "на заказ", "заказ из", "заказать",
     "из китая", "из кореи", "из японии", "из оаэ", "из дубая",
     "из сша", "из америки", "из европы", "в пути", "едет",
-    "ожидается", "ожидание", "прибудет", "приход", "доставка из",
-    "пригон", "пригнать", "привезу", "привезем", "можно заказать",
-    "заказной", "на заказ из", "авто из китая", "авто из кореи",
-    "авто из японии", "авто из сша", "с аукциона", "copart", "iaai", "manheim"
+    "ожидается", "прибудет", "доставка из", "пригон", "пригнать",
+    "можно заказать", "с аукциона", "copart", "iaai", "manheim"
 ]
 
 NOT_CLEARED_KEYWORDS = [
     "не растаможен", "не растаможена", "не растаможено",
-    "без растаможки", "без растамож", "не растаможенная",
-    "не на учете", "не стоит на учете", "на учете не стоит",
-    "временный учет", "временный учёт", "транзит",
-    "не оформлен", "не оформлена", "без птс", "без учёта",
-    "на транзите", "транзитные номера", "временные номера"
+    "без растаможки", "без растамож", "не на учете", "не стоит на учете",
+    "временный учет", "временный учёт", "транзит", "не оформлен",
+    "без птс", "на транзите", "транзитные номера"
 ]
 
 URGENT_KEYWORDS = [
     "срочно", "срочная продажа", "срочно продаю", "срочн",
-    "цена снижена", "снизил цену", "торг реальному", "торг уместен",
-    "ниже рынка", "отдам дешево", "отдам дёшево", "быстро продам",
-    "нужны деньги", "срочный выкуп", "сегодня", "только сегодня"
+    "цена снижена", "снизил цену", "торг реальному", "ниже рынка",
+    "отдам дешево", "отдам дёшево", "быстро продам", "нужны деньги"
 ]
 
 HEADERS = {
@@ -105,7 +89,7 @@ def load_seen():
 
 
 def save_seen(seen):
-    recent = list(seen)[-3000:]
+    recent = list(seen)[-4000:]
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(recent, f)
 
@@ -147,40 +131,16 @@ def extract_year(title):
     return None
 
 
-def extract_make_model(title):
+def extract_make(title):
     if not title:
-        return None, None
-
+        return None
     clean = re.sub(r"[^\w\s\-]", " ", title.lower())
     clean = re.sub(r"\s+", " ", clean).strip()
-    clean = re.sub(r"\b(19|20)\d{2}\b", "", clean)
-    clean = re.sub(r"\s*г\.?\s*", " ", clean).strip()
-
     words = clean.split()
-    if not words:
-        return None, None
-
-    make = None
-    model_parts = []
-
-    for i, word in enumerate(words):
-        if word in KNOWN_MAKES:
-            make = word
-            model_parts = words[i+1:i+3]
-            break
-        if i + 1 < len(words):
-            two = f"{word} {words[i+1]}"
-            if two in KNOWN_MAKES:
-                make = two
-                model_parts = words[i+2:i+4]
-                break
-
-    if not make and words:
-        make = words[0]
-        model_parts = words[1:3]
-
-    model = " ".join(model_parts).strip() if model_parts else None
-    return make, model
+    for word in words:
+        if word in ALLOWED_MAKES:
+            return word
+    return None
 
 
 def is_junk_title(title):
@@ -195,41 +155,28 @@ def is_junk_title(title):
 
 def is_installment(title, description=""):
     text = (title + " " + (description or "")).lower()
-    for word in INSTALLMENT_KEYWORDS:
-        if word in text:
-            return True
-    return False
+    return any(w in text for w in INSTALLMENT_KEYWORDS)
 
 
 def is_order_car(title, description=""):
     text = (title + " " + (description or "")).lower()
-    for word in ORDER_KEYWORDS:
-        if word in text:
-            return True
-    return False
+    return any(w in text for w in ORDER_KEYWORDS)
 
 
 def is_not_cleared(title, description=""):
     text = (title + " " + (description or "")).lower()
-    for word in NOT_CLEARED_KEYWORDS:
-        if word in text:
-            return True
-    return False
+    return any(w in text for w in NOT_CLEARED_KEYWORDS)
 
 
 def is_urgent(title, description=""):
     text = (title + " " + (description or "")).lower()
-    for word in URGENT_KEYWORDS:
-        if word in text:
-            return True
-    return False
+    return any(w in text for w in URGENT_KEYWORDS)
 
 
 def get_clean_price_usd(ad):
     price = ad.get("price")
     if price is None:
         return None
-
     try:
         price = float(price)
     except (ValueError, TypeError):
@@ -238,43 +185,37 @@ def get_clean_price_usd(ad):
     currency = (ad.get("currency") or "").upper().strip()
     symbol = (ad.get("symbol") or "").upper().strip()
 
-    is_usd = currency in ("USD", "\( ") or symbol in (" \)", "USD")
+    is_usd = currency in ("USD",) or symbol in ("$", "USD")
     is_kgs = currency in ("KGS", "COM", "СОМ") or symbol in ("COM", "С", "СОМ")
 
     if is_usd:
         usd = price
     elif is_kgs:
-        usd = price / USD_KGS_RATE
+        # иногда цену в сомах пишут как "15000" имея в виду доллары
+        if 3000 <= price <= 80000:
+            usd = price
+        else:
+            usd = price / USD_KGS_RATE
     else:
-        usd = price / USD_KGS_RATE if price > 5000 else price
+        usd = price if price < 100000 else price / USD_KGS_RATE
 
-    if is_kgs and 3500 <= price <= 65000:
-        usd = price
-
-    if usd is None or usd < 1500 or usd > 90000:
+    if usd is None or usd < 2000 or usd > 120000:
         return None
-
-    if is_kgs and price < 80000 and not (3500 <= price <= 65000):
-        return None
-
     return round(usd)
 
 
-def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
+def get_ads(page=1, q=None, category_id=None, per_page=40):
     params = {
         "per-page": per_page,
         "page": page,
         "expand": "url",
         "sort_by": "newest",
         "city_id": CITY_ID,
-        "category_id": 1501,
     }
+    if category_id:
+        params["category_id"] = category_id
     if q:
         params["q"] = q
-    if year_from:
-        params["parameters[62][from]"] = year_from
-    if year_to:
-        params["parameters[62][to]"] = year_to
 
     try:
         r = requests.get(
@@ -291,11 +232,11 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
 
 
 def remove_outliers(prices):
-    if len(prices) < 5:
+    if len(prices) < 4:
         return prices
     med = statistics.median(prices)
-    filtered = [p for p in prices if med * 0.45 <= p <= med * 1.35]
-    return filtered if len(filtered) >= 4 else prices
+    filtered = [p for p in prices if med * 0.5 <= p <= med * 1.4]
+    return filtered if len(filtered) >= 3 else prices
 
 
 def percentile(data, percent):
@@ -311,46 +252,32 @@ def percentile(data, percent):
     return sorted_data[floor] * (ceil - index) + sorted_data[ceil] * (index - floor)
 
 
-def get_market_price(make, model, year):
+def get_market_price(make, year):
     if not make:
         return None, 0, None
 
-    query = make
-    if model:
-        first_model = model.split()[0]
-        if len(first_model) > 1:
-            query += " " + first_model
-
-    year_from = max(year - 3, 1985) if year else None
-    year_to = year + 3 if year else None
-
-    items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
+    items = get_ads(q=make, per_page=50)
     prices = []
 
     for item in items:
         if is_junk_title(item.get("title", "")):
             continue
-
+        item_make = extract_make(item.get("title", ""))
+        if item_make != make:
+            continue
         item_year = extract_year(item.get("title", ""))
-        if year and item_year and abs(item_year - year) > 3:
+        if year and item_year and abs(item_year - year) > 4:
             continue
-
-        item_make, _ = extract_make_model(item.get("title", ""))
-        if item_make and make and item_make != make and make not in item_make and item_make not in make:
-            continue
-
         price = get_clean_price_usd(item)
-        if price and 1500 < price < 90000:
+        if price and 2000 < price < 120000:
             prices.append(price)
 
     prices = remove_outliers(prices)
-
     if len(prices) < MIN_SIMILAR_ADS:
         return None, len(prices), None
 
-    market_hard = percentile(prices, 20)
+    market_hard = percentile(prices, 25)
     market_median = statistics.median(prices)
-
     return market_hard, len(prices), market_median
 
 
@@ -362,18 +289,20 @@ def analyze_and_notify(ad, seen):
     title = ad.get("title") or "Без названия"
     description = ad.get("description") or ""
 
+    make = extract_make(title)
+    if make not in ALLOWED_MAKES:
+        seen.add(ad_id)
+        return
+
     if is_junk_title(title):
         seen.add(ad_id)
         return
-
     if is_installment(title, description):
         seen.add(ad_id)
         return
-
     if is_order_car(title, description):
         seen.add(ad_id)
         return
-
     if is_not_cleared(title, description):
         seen.add(ad_id)
         return
@@ -388,31 +317,20 @@ def analyze_and_notify(ad, seen):
         seen.add(ad_id)
         return
 
-    make, model = extract_make_model(title)
-    market_price, count, market_median = get_market_price(make, model, year)
+    market_price, count, market_median = get_market_price(make, year)
 
-    if not market_price or count < MIN_SIMILAR_ADS:
-        seen.add(ad_id)
-        return
-
-    asking = price_usd
-    wholesale_target = market_price * (1 - WHOLESALE_MARGIN)
-    discount = (market_price - asking) / market_price
-    potential_profit = market_price - asking
-
-    urgent = is_urgent(title, description)
-
-    is_excellent_deal = (
-        discount >= MIN_DISCOUNT_TO_NOTIFY and
-        asking <= wholesale_target * 1.08
-    )
-
-    if urgent and discount >= 0.12:
-        is_excellent_deal = True
-
-    if not is_excellent_deal:
-        seen.add(ad_id)
-        return
+    # Если рынок не посчитался — всё равно кидаем (чтобы хоть что-то шло)
+    if market_price and count >= MIN_SIMILAR_ADS:
+        discount = (market_price - price_usd) / market_price
+        if discount < MIN_DISCOUNT_TO_NOTIFY and not is_urgent(title, description):
+            seen.add(ad_id)
+            return
+        potential_profit = market_price - price_usd
+    else:
+        discount = 0
+        potential_profit = 0
+        market_price = None
+        market_median = None
 
     url = "https://lalafo.kg" + (ad.get("url") or "")
     city = ad.get("city") or "Бишкек"
@@ -420,57 +338,77 @@ def analyze_and_notify(ad, seen):
     if ad.get("images"):
         photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
 
-    price_kgs = round(asking * USD_KGS_RATE)
-    market_kgs = round(market_price * USD_KGS_RATE)
-    wholesale_kgs = round(wholesale_target * USD_KGS_RATE)
-    median_kgs = round(market_median * USD_KGS_RATE) if market_median else 0
-
+    price_kgs = round(price_usd * USD_KGS_RATE)
+    urgent = is_urgent(title, description)
     urgent_mark = "⚡ <b>СРОЧНО!</b>\n\n" if urgent else ""
 
-    text = (
-        f"{urgent_mark}"
-        f"🔥 <b>ВЫГОДНО ДЛЯ ПЕРЕКУПА</b>\n\n"
-        f"<b>{title}</b>\n"
-        f"📍 {city}\n\n"
-        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\~{asking:.0f}$)\n"
-        f"📊 <b>Рыночная (20%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
-        f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
-        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
-        f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
-        f"💵 Потенциал: <b>\~{potential_profit:.0f}$</b>\n"
-        f"🔍 Похожих: {count}\n\n"
-        f"<a href='{url}'>Открыть объявление</a>"
-    )
+    if market_price:
+        market_kgs = round(market_price * USD_KGS_RATE)
+        median_kgs = round(market_median * USD_KGS_RATE) if market_median else 0
+        text = (
+            f"{urgent_mark}"
+            f"🔥 <b>{make.upper()}</b>\n\n"
+            f"<b>{title}</b>\n"
+            f"📍 {city}\n\n"
+            f"💰 <b>Цена:</b> {price_kgs:,.0f} сом  (\~{price_usd}$)\n"
+            f"📊 <b>Рынок (25%):</b> \~{market_kgs:,.0f} сом  (\~{market_price}$)\n"
+            f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
+            f"📉 Ниже рынка: <b>{discount*100:.1f}%</b>\n"
+            f"💵 Потенциал: <b>\~{potential_profit:.0f}$</b>\n"
+            f"🔍 Похожих: {count}\n\n"
+            f"<a href='{url}'>Открыть объявление</a>"
+        )
+    else:
+        text = (
+            f"{urgent_mark}"
+            f"🔥 <b>{make.upper()}</b>\n\n"
+            f"<b>{title}</b>\n"
+            f"📍 {city}\n\n"
+            f"💰 <b>Цена:</b> {price_kgs:,.0f} сом  (\~{price_usd}$)\n"
+            f"📊 Рынок пока не посчитался\n\n"
+            f"<a href='{url}'>Открыть объявление</a>"
+        )
 
     send_telegram(text, photo)
-    status = "СРОЧНО" if urgent else "ВЫГОДНО"
-    print(f"[{datetime.now()}] 🔥 {status} | {title[:45]} | −{discount*100:.1f}% | +{potential_profit:.0f}$")
-
+    print(f"[{datetime.now()}] 🔥 {make.upper()} | {title[:50]} | {price_usd}$")
     seen.add(ad_id)
 
 
 def main():
-    print("Бот перекупа запущен...")
+    print("Бот BYD + Kia запущен (каждые 30 сек)...")
     send_telegram(
-        f"✅ <b>Бот обновлён</b>\n\n"
-        f"• Жёстко отсекает запчасти\n"
-        f"• Нерастаможенные — нет\n"
-        f"• Под заказ / Китай / Корея — нет\n"
-        f"• Рассрочка — нет\n"
-        f"• Год от 1990\n"
-        f"• Рыночная цена: 20-й перцентиль"
+        "✅ <b>Бот обновлён</b>\n\n"
+        "• Только <b>BYD</b> и <b>Kia</b>\n"
+        "• Проверка каждые 30 секунд\n"
+        "• Категории машин исправлены\n"
+        "• Запчасти / рассрочка / под заказ / нерастаможенные — отсекаются"
     )
 
     seen = load_seen()
 
     while True:
         try:
-            print(f"[{datetime.now()}] Проверяю новые объявления...")
-            ads = get_ads(page=1, per_page=50)
+            print(f"[{datetime.now()}] Проверяю BYD + Kia...")
+            all_ads = []
 
+            # Ищем по брендам + по категориям
+            for q in ["byd", "kia"]:
+                ads = get_ads(q=q, per_page=30)
+                all_ads.extend(ads)
+
+            for cat in CAR_CATEGORIES:
+                ads = get_ads(category_id=cat, per_page=25)
+                all_ads.extend(ads)
+
+            # Убираем дубли
+            unique = {}
+            for ad in all_ads:
+                unique[ad.get("id")] = ad
+            ads = list(unique.values())
+
+            # Сначала срочные
             urgent_ads = []
             normal_ads = []
-
             for ad in ads:
                 title = ad.get("title") or ""
                 desc = ad.get("description") or ""
@@ -487,7 +425,7 @@ def main():
 
         except Exception as e:
             print("Ошибка в основном цикле:", e)
-            time.sleep(30)
+            time.sleep(20)
 
 
 if __name__ == "__main__":
