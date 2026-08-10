@@ -1,10 +1,10 @@
-import os
-import time
 import json
+import os
 import re
 import statistics
-import requests
+import time
 from datetime import datetime
+import requests
 
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
@@ -22,80 +22,251 @@ SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
 
 # ---- ЭКОНОМИКА СКУПКИ (главное) ----
-# MAX_BUY = REAL_QUICK_SELL - EXPENSES - NEGOTIATION_RESERVE - REQUIRED_PROFIT
-EXPENSES_USD = 250              # оформление, мелкий ремонт, объявления, бензин
-NEGOTIATION_RESERVE = 0.04      # 4% — запас на торг при перепродаже
-REQUIRED_PROFIT_USD = 600       # минимальная чистая прибыль, которую хочешь
-# Дополнительно: не брать, если запас прибыли < этого %
-MIN_PROFIT_RATIO = 0.06         # хотя бы ~6% от цены быстрой продажи
+EXPENSES_USD = 250  # оформление, мелкий ремонт, объявления, бензин
+NEGOTIATION_RESERVE = 0.04  # 4% — запас на торг при перепродаже
+REQUIRED_PROFIT_USD = 600  # стандартная желаемая чистая прибыль
+
+# Настройки для СВЕРХЛИКВИДА (Camry 70 Hybrid)
+CAMRY_REQUIRED_PROFIT_USD = 400  # сниженный порог прибыли, так как уходит за пару часов
+
+MIN_PROFIT_RATIO = 0.06  # хотя бы ~6% от цены быстрой продажи
 
 # Рыночная «быстрая продажа» = консервативный низ нормального рынка
-QUICK_SELL_PERCENTILE = 22      # 22-й перцентиль очищенных аналогов
-MIN_COMPARABLES = 5             # меньше — не считаем MAX_BUY уверенно
+QUICK_SELL_PERCENTILE = 22  # 22-й перцентиль очищенных аналогов
+MIN_COMPARABLES = 5  # меньше — не считаем MAX_BUY уверенно
 YEAR_TOLERANCE = 1
-MILEAGE_TOLERANCE = 0.30        # ±30%
+MILEAGE_TOLERANCE = 0.30  # ±30%
 
 KNOWN_MAKES = {
-    "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
-    "mercedes-benz", "audi", "volkswagen", "vw", "ford", "chevrolet", "mazda",
-    "subaru", "mitsubishi", "suzuki", "opel", "skoda", "renault", "peugeot",
-    "citroen", "volvo", "land rover", "range rover", "jeep", "dodge", "chrysler",
-    "infiniti", "acura", "genesis", "ssangyong", "daewoo", "ravon", "geely",
-    "chery", "haval", "great wall", "byd", "tesla", "porsche", "mini", "daihatsu",
-    "lifan", "faw", "uaz", "lada", "ваз"
+    "toyota",
+    "lexus",
+    "honda",
+    "nissan",
+    "hyundai",
+    "kia",
+    "bmw",
+    "mercedes",
+    "mercedes-benz",
+    "audi",
+    "volkswagen",
+    "vw",
+    "ford",
+    "chevrolet",
+    "mazda",
+    "subaru",
+    "mitsubishi",
+    "suzuki",
+    "opel",
+    "skoda",
+    "renault",
+    "peugeot",
+    "citroen",
+    "volvo",
+    "land rover",
+    "range rover",
+    "jeep",
+    "dodge",
+    "chrysler",
+    "infiniti",
+    "acura",
+    "genesis",
+    "ssangyong",
+    "daewoo",
+    "ravon",
+    "geely",
+    "chery",
+    "haval",
+    "great wall",
+    "byd",
+    "tesla",
+    "porsche",
+    "mini",
+    "daihatsu",
+    "lifan",
+    "faw",
+    "uaz",
+    "lada",
+    "ваз",
 }
 
 JUNK_KEYWORDS = [
-    "ремонт", "запчаст", "диск", "диски", "ремень", "турбина", "двигатель",
-    "коробка", "акпп", "мкпп", "бампер", "крыло", "дверь", "капот",
-    "стекло", "зеркало", "подшипник", "сайлент", "амортизатор", "стойка",
-    "радиатор", "генератор", "стартер", "компрессор", "кондиционер",
-    "шины", "резина", "колесо", "колпак", "ключ", "замок",
-    "сигнализация", "магнитола", "камера", "парктроник", "услуг", "работа",
-    "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе",
-    "фара", "фары", "стоп", "стопы", "фонарь", "поворотник"
+    "ремонт",
+    "запчаст",
+    "диск",
+    "диски",
+    "ремень",
+    "турбина",
+    "двигатель",
+    "коробка",
+    "акпп",
+    "мкпп",
+    "бампер",
+    "крыло",
+    "дверь",
+    "капот",
+    "стекло",
+    "зеркало",
+    "подшипник",
+    "сайлент",
+    "амортизатор",
+    "стойка",
+    "радиатор",
+    "генератор",
+    "стартер",
+    "компрессор",
+    "кондиционер",
+    "шины",
+    "резина",
+    "колесо",
+    "колпак",
+    "ключ",
+    "замок",
+    "сигнализация",
+    "магнитола",
+    "камера",
+    "парктроник",
+    "услуг",
+    "работа",
+    "разбор",
+    "контрактн",
+    "б/у запчаст",
+    "продаю запчаст",
+    "в разборе",
+    "фара",
+    "фары",
+    "стоп",
+    "стопы",
+    "фонарь",
+    "поворотник",
 ]
 
 DAMAGE_KEYWORDS = [
-    "битый", "битая", "битое", "бит", "после дтп", "после аварии",
-    "аварийный", "аварийная", "дтп", "не на ходу", "не находу",
-    "под восстановление", "на запчасти", "на запчасть", "требует ремонта",
-    "нужен ремонт", "кузовной", "после удара", "вмятин",
-    "скручен", "скрутка", "некондиция", "на разбор",
-    "распил", "каркас", "только на запчасти", "конструктор", "распилен"
+    "битый",
+    "битая",
+    "битое",
+    "бит",
+    "после дтп",
+    "после аварии",
+    "аварийный",
+    "аварийная",
+    "дтп",
+    "не на ходу",
+    "не находу",
+    "под восстановление",
+    "на запчасти",
+    "на запчасть",
+    "требует ремонта",
+    "нужен ремонт",
+    "кузовной",
+    "после удара",
+    "вмятин",
+    "скручен",
+    "скрутка",
+    "некондиция",
+    "на разбор",
+    "распил",
+    "каркас",
+    "только на запчасти",
+    "конструктор",
+    "распилен",
 ]
 
 INSTALLMENT_KEYWORDS = [
-    "рассрочк", "рассрочка", "первоначальн", "первоначальный взнос",
-    "взнос", "в кредит", "кредит", "ежемесячн", "платеж", "платёж",
-    "лизинг", "в месяц", "по месяц", "оплата частями", "частями",
-    "первый взнос", "перв. взнос", "пв ", " пв", "0-0-24", "0-0-12",
-    "без первоначального", "без взноса"
+    "рассрочк",
+    "рассрочка",
+    "первоначальн",
+    "первоначальный взнос",
+    "взнос",
+    "в кредит",
+    "кредит",
+    "ежемесячн",
+    "платеж",
+    "платёж",
+    "лизинг",
+    "в месяц",
+    "по месяц",
+    "оплата частями",
+    "частями",
+    "первый взнос",
+    "перв. взнос",
+    "пв ",
+    " пв",
+    "0-0-24",
+    "0-0-12",
+    "без первоначального",
+    "без взноса",
 ]
 
 ORDER_KEYWORDS = [
-    "под заказ", "подзаказ", "на заказ", "заказ из", "заказать",
-    "из китая", "из кореи", "из японии", "из оаэ", "из дубая",
-    "из сша", "из америки", "из европы", "в пути", "едет",
-    "ожидается", "ожидание", "прибудет", "приход", "доставка из",
-    "пригон", "пригнать", "привезу", "привезем", "можно заказать",
-    "заказной", "с аукциона", "copart", "iaai", "manheim"
+    "под заказ",
+    "подзаказ",
+    "на заказ",
+    "заказ из",
+    "заказать",
+    "из китая",
+    "из кореи",
+    "из японии",
+    "из оаэ",
+    "из дубая",
+    "из сша",
+    "из америки",
+    "из европы",
+    "в пути",
+    "едет",
+    "ожидается",
+    "ожидание",
+    "прибудет",
+    "приход",
+    "доставка из",
+    "пригон",
+    "пригнать",
+    "привезу",
+    "привезем",
+    "можно заказать",
+    "заказной",
+    "с аукциона",
+    "copart",
+    "iaai",
+    "manheim",
 ]
 
 NOT_CLEARED_KEYWORDS = [
-    "не растаможен", "не растаможена", "не растаможено",
-    "без растаможки", "без растамож", "не растаможенная",
-    "не на учете", "не стоит на учете", "на учете не стоит",
-    "временный учет", "временный учёт", "транзит",
-    "не оформлен", "не оформлена", "без птс", "без учёта",
-    "на транзите", "транзитные номера", "временные номера"
+    "не растаможен",
+    "не растаможена",
+    "не растаможено",
+    "без растаможки",
+    "без растамож",
+    "не растаможенная",
+    "не на учете",
+    "не стоит на учете",
+    "на учете не стоит",
+    "временный учет",
+    "временный учёт",
+    "транзит",
+    "не оформлен",
+    "не оформлена",
+    "без птс",
+    "без учёта",
+    "на транзите",
+    "транзитные номера",
+    "временные номера",
 ]
 
 URGENT_KEYWORDS = [
-    "срочно", "срочная продажа", "срочно продаю", "срочн",
-    "цена снижена", "снизил цену", "торг реальному", "торг уместен",
-    "ниже рынка", "отдам дешево", "отдам дёшево", "быстро продам",
-    "нужны деньги", "срочный выкуп"
+    "срочно",
+    "срочная продажа",
+    "срочно продаю",
+    "срочн",
+    "цена снижена",
+    "снизил цену",
+    "торг реальному",
+    "торг уместен",
+    "ниже рынка",
+    "отдам дешево",
+    "отдам дёшево",
+    "быстро продам",
+    "нужны деньги",
+    "срочный выкуп",
 ]
 
 HEADERS = {
@@ -107,6 +278,7 @@ HEADERS = {
 }
 
 # ================================================
+
 
 def load_seen():
     if os.path.exists(SEEN_FILE):
@@ -196,11 +368,8 @@ def extract_make_model(title):
 
 
 def extract_mileage(text):
-    """Пробег в км из текста. None если нет."""
     if not text:
         return None
-    t = text.lower().replace(" ", "")
-    # 120000км, 120 тыс, 120000 km, пробег: 85 000
     patterns = [
         r"пробег[:\s]*(\d{1,3}[\s]?000|\d{4,7})\s*(км|km)?",
         r"(\d{1,3}[\s]?\d{3})\s*(км|km)",
@@ -222,7 +391,6 @@ def extract_mileage(text):
 
 
 def extract_engine(text):
-    """Объём двигателя примерно: 1.6, 2.0, 3.5 и т.д."""
     if not text:
         return None
     m = re.search(r"\b([1-6][.,]\d)\s*(л|l|cci|куб)?\b", text.lower())
@@ -247,7 +415,10 @@ def extract_fuel(text):
 
 def extract_transmission(text):
     t = (text or "").lower()
-    if any(x in t for x in ["акпп", "автомат", "automatic", "cvt", "вариатор", "робот"]):
+    if any(
+        x in t
+        for x in ["акпп", "автомат", "automatic", "cvt", "вариатор", "робот"]
+    ):
         return "auto"
     if any(x in t for x in ["мкпп", "механика", "механич", "manual"]):
         return "manual"
@@ -299,7 +470,12 @@ def get_clean_price_usd(ad):
     symbol = (ad.get("symbol") or "").upper().strip()
     if currency in ("USD", "$") or symbol in ("$", "USD"):
         usd = price
-    elif currency in ("KGS", "COM", "СОМ", "SOM") or symbol in ("COM", "С", "СОМ", "SOM"):
+    elif currency in ("KGS", "COM", "СОМ", "SOM") or symbol in (
+        "COM",
+        "С",
+        "СОМ",
+        "SOM",
+    ):
         usd = price / USD_KGS_RATE
     else:
         usd = price / USD_KGS_RATE if price >= 80000 else price
@@ -309,7 +485,6 @@ def get_clean_price_usd(ad):
 
 
 def parse_ad_specs(ad):
-    """Собрать характеристики объявления для сопоставления."""
     title = ad.get("title") or ""
     desc = ad.get("description") or ""
     blob = f"{title} {desc}"
@@ -329,6 +504,30 @@ def parse_ad_specs(ad):
         "description": desc,
         "ad": ad,
     }
+
+
+def is_camry_70_hybrid(specs):
+    """Проверка, является ли машина Toyota Camry 70 Hybrid."""
+    blob = f"{specs.get('title', '')} {specs.get('description', '')}".lower()
+
+    is_camry = "camry" in blob or "камри" in blob
+    if not is_camry:
+        return False
+
+    is_hybrid = (
+        specs.get("fuel") == "hybrid" or "гибрид" in blob or "hybrid" in blob
+    )
+    if not is_hybrid:
+        return False
+
+    year = specs.get("year")
+    # 70 кузов выпускается с late 2017 по 2024
+    is_70_year = year and year >= 2017
+    is_70_keyword = any(
+        k in blob for k in ["70", "v70", "xv70", "75", "v75", "семьдесят"]
+    )
+
+    return is_70_year or is_70_keyword
 
 
 def is_bad_listing(title, description=""):
@@ -376,18 +575,15 @@ def get_ads(page=1, q=None, per_page=50, year_from=None, year_to=None):
 
 
 def specs_match(target, cand):
-    """
-    Максимально похожие аналоги:
-    brand + model + year±1 + (engine/fuel/trans/body/drive если есть) + mileage±30%.
-    Обязательны: make, model (базово), year±1.
-    Остальное — если указано у обоих, должно совпадать.
-    """
     if not target.get("make") or not cand.get("make"):
         return False
-    if target["make"] != cand["make"] and target["make"] not in (cand["make"] or "") and (cand["make"] or "") not in target["make"]:
+    if (
+        target["make"] != cand["make"]
+        and target["make"] not in (cand["make"] or "")
+        and (cand["make"] or "") not in target["make"]
+    ):
         return False
 
-    # model: хотя бы первое слово модели
     t_model = (target.get("model") or "").split()
     c_model = (cand.get("model") or "").split()
     if t_model and c_model:
@@ -402,7 +598,6 @@ def specs_match(target, cand):
     if ty and not cy:
         return False
 
-    # Опциональные поля — только если есть у обоих
     for key in ("engine", "fuel", "transmission", "body", "drive"):
         tv, cv = target.get(key), cand.get(key)
         if tv and cv and tv != cv:
@@ -417,11 +612,9 @@ def specs_match(target, cand):
 
 
 def remove_price_outliers(prices):
-    """Убрать слишком дорогие и подозрительно дешёвые."""
     if len(prices) < 4:
         return prices
     med = statistics.median(prices)
-    # жёстче сверху (дорогие «хотелки»), мягче снизу но режем явный мусор
     low, high = med * 0.55, med * 1.28
     cleaned = [p for p in prices if low <= p <= high]
     return cleaned if len(cleaned) >= 3 else prices
@@ -440,36 +633,26 @@ def percentile(data, percent):
 
 
 def calc_real_quick_sell_price(comparable_prices):
-    """
-    REAL_QUICK_SELL_PRICE — цена, по которой реально быстро уйдёт.
-    Не среднее. Консервативный низ нормального очищенного рынка.
-    """
     cleaned = remove_price_outliers(comparable_prices)
     if len(cleaned) < MIN_COMPARABLES:
         return None, cleaned
     return percentile(cleaned, QUICK_SELL_PERCENTILE), cleaned
 
 
-def calc_max_buy_price(quick_sell):
-    """
-    MAX_BUY_PRICE =
-      REAL_QUICK_SELL
-      - EXPENSES
-      - NEGOTIATION_RESERVE
-      - REQUIRED_PROFIT
-    """
+def calc_max_buy_price(quick_sell, required_profit=REQUIRED_PROFIT_USD):
     if not quick_sell or quick_sell <= 0:
         return None
     after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
-    max_buy = after_reserve - EXPENSES_USD - REQUIRED_PROFIT_USD
-    # доп. проверка доли прибыли
-    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO:
+    max_buy = after_reserve - EXPENSES_USD - required_profit
+    if (
+        quick_sell > 0
+        and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO
+    ):
         max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - EXPENSES_USD
     return max(0, round(max_buy))
 
 
 def find_comparables(target_specs):
-    """Собрать максимально похожие объявления."""
     make = target_specs.get("make")
     model = target_specs.get("model")
     year = target_specs.get("year")
@@ -484,12 +667,15 @@ def find_comparables(target_specs):
     year_to = year + YEAR_TOLERANCE
 
     items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
-    # вторая страница для плотности рынка
-    items += get_ads(page=2, q=query, per_page=40, year_from=year_from, year_to=year_to)
+    items += get_ads(
+        page=2, q=query, per_page=40, year_from=year_from, year_to=year_to
+    )
 
     comps = []
     for item in items:
-        if is_bad_listing(item.get("title") or "", item.get("description") or ""):
+        if is_bad_listing(
+            item.get("title") or "", item.get("description") or ""
+        ):
             continue
         sp = parse_ad_specs(item)
         if not sp["price"]:
@@ -520,6 +706,12 @@ def analyze_and_notify(ad, seen):
         seen.add(ad_id)
         return
 
+    # Проверка на приоритет (Camry 70 Hybrid)
+    is_camry_70_h = is_camry_70_hybrid(target)
+    req_profit = (
+        CAMRY_REQUIRED_PROFIT_USD if is_camry_70_h else REQUIRED_PROFIT_USD
+    )
+
     comps = find_comparables(target)
     prices = [c["price"] for c in comps if c.get("price")]
 
@@ -529,7 +721,7 @@ def analyze_and_notify(ad, seen):
         seen.add(ad_id)
         return
 
-    max_buy = calc_max_buy_price(quick_sell)
+    max_buy = calc_max_buy_price(quick_sell, required_profit=req_profit)
     if max_buy is None or max_buy <= 0:
         seen.add(ad_id)
         return
@@ -538,7 +730,10 @@ def analyze_and_notify(ad, seen):
 
     # ГЛАВНОЕ ПРАВИЛО
     if seller > max_buy:
-        print(f"  skip (дорого): {title[:35]} | ask={seller}$ max_buy={max_buy}$ qs={quick_sell:.0f}$")
+        print(
+            f"  skip (дорого): {title[:35]} | ask={seller}$ max_buy={max_buy}$"
+            f" qs={quick_sell:.0f}$"
+        )
         seen.add(ad_id)
         return
 
@@ -551,14 +746,19 @@ def analyze_and_notify(ad, seen):
     city = ad.get("city") or "Бишкек"
     photo = None
     if ad.get("images"):
-        photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
+        photo = ad["images"][0].get("original_url") or ad["images"][0].get(
+            "thumbnail_url"
+        )
 
     seller_kgs = round(seller * USD_KGS_RATE)
     max_buy_kgs = round(max_buy * USD_KGS_RATE)
     qs_kgs = round(quick_sell * USD_KGS_RATE)
 
+    header = "🎯 <b>СВЕРХЛИКВИД: CAMRY 70 HYBRID</b>\n" if is_camry_70_h else ""
     urgent_mark = "⚡ <b>СРОЧНО</b>\n" if urgent else ""
+
     text = (
+        f"{header}"
         f"{urgent_mark}"
         f"✅ <b>REAL BUY — МОЖНО ЗАБИРАТЬ</b>\n\n"
         f"<b>{title}</b>\n"
@@ -568,48 +768,24 @@ def analyze_and_notify(ad, seen):
         f"🏷 <b>Быстрая продажа (ориентир):</b> ~{qs_kgs:,.0f} сом (~{quick_sell:.0f}$)\n\n"
         f"📉 Запас до потолка: <b>{max_buy - seller}$</b>\n"
         f"💵 Ожид. прибыль после расходов: <b>~{expected_profit:.0f}$</b> ({margin_pct:.0f}%)\n"
-        f"🔧 Расходы заложены: {EXPENSES_USD}$ | резерв торга {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {REQUIRED_PROFIT_USD}$\n"
+        f"🔧 Расходы заложены: {EXPENSES_USD}$ | резерв торга {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {req_profit}$\n"
         f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)})\n\n"
         f"<a href='{url}'>Открыть объявление</a>"
     )
 
     send_telegram(text, photo)
-    print(f"[{datetime.now()}] REAL_BUY | {title[:40]} | ask={seller}$ max={max_buy}$ profit~{expected_profit:.0f}$")
+    print(
+        f"[{datetime.now()}] REAL_BUY | {title[:40]} | ask={seller}$"
+        f" max={max_buy}$ profit~{expected_profit:.0f}$"
+    )
     seen.add(ad_id)
 
 
 def main():
     print("Бот REAL_BUY / MAX_BUY запущен...")
     send_telegram(
-        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>\n\n"
-        f"✅ Алгоритм скупки активен\n"
-        f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLERANCE*100)}%\n"
-        f"• Быстрая продажа = {QUICK_SELL_PERCENTILE}-й перцентиль\n"
-        f"• MAX_BUY = продажа − {EXPENSES_USD}$ − торг {int(NEGOTIATION_RESERVE*100)}% − прибыль {REQUIRED_PROFIT_USD}$\n"
-        f"• Кидаю только если цена ≤ MAX_BUY"
-    )
-    seen = load_seen()
-    print(f"seen={len(seen)}")
-
-    while True:
-        try:
-            print(f"\n[{datetime.now()}] Проверка...")
-            ads = get_ads(page=1, per_page=40)
-            print(f"Новых с ленты: {len(ads)}")
-            if not ads:
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-            for ad in ads:
-                analyze_and_notify(ad, seen)
-
-            save_seen(seen)
-            print(f"Цикл OK, сон {CHECK_INTERVAL}с")
-            time.sleep(CHECK_INTERVAL)
-        except Exception as e:
-            print("Ошибка:", e)
-            time.sleep(20)
-
-
-if __name__ == "__main__":
-    main()
+        "🎩 <b>Господин Дияр, ваш бот обновлен и готов к работе.</b>\n\n"
+        f"🔥 <b>ВКЛЮЧЕН ПРИОРИТЕТ: Toyota Camry 70 Hybrid</b>\n"
+        f"• Алгоритм проводит приоритетный поиск по Камри Гибрид 70\n"
+        f"• Порог прибыли для них снижен до ${CAMRY_REQUIRED_PROFIT_USD} (уходят мгновенно)\n"
+        f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLER
