@@ -10,28 +10,30 @@ from datetime import datetime
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 45                # быстрее проверка (было 90)
+# ИИ (опционально)
+AI_API_KEY = "ВСТАВЬ_СВОЙ_КЛЮЧ_СЮДА"
+AI_BASE_URL = "https://api.openai.com/v1"
+AI_MODEL = "gpt-4o-mini"
+
+CHECK_INTERVAL = 45
 MIN_YEAR = 2005
-WHOLESALE_MARGIN = 0.18
-MIN_DISCOUNT_TO_NOTIFY = 0.10      # мягче
-MIN_SIMILAR_ADS = 4
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
-MARKET_PERCENTILE = 18
-MIN_PROFIT = 500                   # было 800
 
-PREFERRED_MAKES = {
-    "toyota", "lexus", "bmw", "mercedes", "mercedes-benz", "audi",
-    "honda", "nissan", "mazda", "subaru", "volkswagen", "vw",
-    "infiniti", "acura", "porsche", "land rover", "range rover",
-    "volvo", "mini", "genesis"
-}
+# ---- ЭКОНОМИКА СКУПКИ (главное) ----
+# MAX_BUY = REAL_QUICK_SELL - EXPENSES - NEGOTIATION_RESERVE - REQUIRED_PROFIT
+EXPENSES_USD = 250              # оформление, мелкий ремонт, объявления, бензин
+NEGOTIATION_RESERVE = 0.04      # 4% — запас на торг при перепродаже
+REQUIRED_PROFIT_USD = 600       # минимальная чистая прибыль, которую хочешь
+# Дополнительно: не брать, если запас прибыли < этого %
+MIN_PROFIT_RATIO = 0.06         # хотя бы ~6% от цены быстрой продажи
 
-STRICT_MAKES = {
-    "hyundai", "kia", "daewoo", "ravon", "ssangyong", "chery",
-    "geely", "haval", "great wall", "byd", "lifan", "faw"
-}
+# Рыночная «быстрая продажа» = консервативный низ нормального рынка
+QUICK_SELL_PERCENTILE = 22      # 22-й перцентиль очищенных аналогов
+MIN_COMPARABLES = 5             # меньше — не считаем MAX_BUY уверенно
+YEAR_TOLERANCE = 1
+MILEAGE_TOLERANCE = 0.30        # ±30%
 
 KNOWN_MAKES = {
     "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
@@ -51,9 +53,7 @@ JUNK_KEYWORDS = [
     "шины", "резина", "колесо", "колпак", "ключ", "замок",
     "сигнализация", "магнитола", "камера", "парктроник", "услуг", "работа",
     "разбор", "контрактн", "б/у запчаст", "продаю запчаст", "в разборе",
-    "фара", "фары", "передняя фара", "задняя фара", "стоп", "стопы",
-    "стоп-сигнал", "стоп сигнал", "задний стоп", "передний стоп",
-    "фонарь", "фонари", "поворотник", "поворотники"
+    "фара", "фары", "стоп", "стопы", "фонарь", "поворотник"
 ]
 
 DAMAGE_KEYWORDS = [
@@ -79,8 +79,7 @@ ORDER_KEYWORDS = [
     "из сша", "из америки", "из европы", "в пути", "едет",
     "ожидается", "ожидание", "прибудет", "приход", "доставка из",
     "пригон", "пригнать", "привезу", "привезем", "можно заказать",
-    "заказной", "на заказ из", "авто из китая", "авто из кореи",
-    "авто из японии", "авто из сша", "с аукциона", "copart", "iaai", "manheim"
+    "заказной", "с аукциона", "copart", "iaai", "manheim"
 ]
 
 NOT_CLEARED_KEYWORDS = [
@@ -96,7 +95,7 @@ URGENT_KEYWORDS = [
     "срочно", "срочная продажа", "срочно продаю", "срочн",
     "цена снижена", "снизил цену", "торг реальному", "торг уместен",
     "ниже рынка", "отдам дешево", "отдам дёшево", "быстро продам",
-    "нужны деньги", "срочный выкуп", "сегодня", "только сегодня"
+    "нужны деньги", "срочный выкуп"
 ]
 
 HEADERS = {
@@ -121,20 +120,19 @@ def load_seen():
 
 
 def save_seen(seen):
-    recent = list(seen)[-3000:]
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(recent, f)
+        json.dump(list(seen)[-3000:], f)
 
 
 def send_telegram(text, photo_url=None):
     try:
-        if photo_url:
+        if photo_url and len(text) <= 1000:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
             data = {
                 "chat_id": CHAT_ID,
                 "photo": photo_url,
                 "caption": text[:1024],
-                "parse_mode": "HTML"
+                "parse_mode": "HTML",
             }
         else:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -142,145 +140,213 @@ def send_telegram(text, photo_url=None):
                 "chat_id": CHAT_ID,
                 "text": text,
                 "parse_mode": "HTML",
-                "disable_web_page_preview": False
+                "disable_web_page_preview": False,
             }
         r = requests.post(url, data=data, timeout=15)
         if r.status_code != 200:
-            print("Telegram error:", r.text[:300])
+            print("Telegram error:", r.text[:250])
         else:
             print("Telegram OK")
     except Exception as e:
-        print("Ошибка отправки в Telegram:", e)
+        print("Telegram:", e)
+
+
+def text_has(text, words):
+    t = (text or "").lower()
+    return any(w in t for w in words)
 
 
 def extract_year(title):
     if not title:
         return None
-    match = re.search(r"(20\d{2}|19\d{2})\s*г", title, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
-    match = re.search(r"\b(20\d{2}|19\d{2})\b", title)
-    if match:
-        return int(match.group(1))
-    return None
+    m = re.search(r"(20\d{2}|19\d{2})\s*г", title, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\b(20\d{2}|19\d{2})\b", title)
+    return int(m.group(1)) if m else None
 
 
 def extract_make_model(title):
     if not title:
         return None, None
-
     clean = re.sub(r"[^\w\s\-]", " ", title.lower())
     clean = re.sub(r"\s+", " ", clean).strip()
     clean = re.sub(r"\b(19|20)\d{2}\b", "", clean)
     clean = re.sub(r"\s*г\.?\s*", " ", clean).strip()
-
     words = clean.split()
     if not words:
         return None, None
-
-    make = None
-    model_parts = []
-
+    make, model_parts = None, []
     for i, word in enumerate(words):
         if word in KNOWN_MAKES:
             make = word
-            model_parts = words[i+1:i+3]
+            model_parts = words[i + 1 : i + 3]
             break
         if i + 1 < len(words):
-            two = f"{word} {words[i+1]}"
+            two = f"{word} {words[i + 1]}"
             if two in KNOWN_MAKES:
                 make = two
-                model_parts = words[i+2:i+4]
+                model_parts = words[i + 2 : i + 4]
                 break
-
     if not make and words:
         make = words[0]
         model_parts = words[1:3]
-
     model = " ".join(model_parts).strip() if model_parts else None
     return make, model
 
 
-def is_junk_title(title):
-    if not title:
-        return True
-    title_lower = title.lower()
-    for word in JUNK_KEYWORDS:
-        if word in title_lower:
-            return True
-    return False
+def extract_mileage(text):
+    """Пробег в км из текста. None если нет."""
+    if not text:
+        return None
+    t = text.lower().replace(" ", "")
+    # 120000км, 120 тыс, 120000 km, пробег: 85 000
+    patterns = [
+        r"пробег[:\s]*(\d{1,3}[\s]?000|\d{4,7})\s*(км|km)?",
+        r"(\d{1,3}[\s]?\d{3})\s*(км|km)",
+        r"(\d+)\s*тыс\.?\s*(км|km)?",
+    ]
+    for p in patterns:
+        m = re.search(p, text.lower())
+        if m:
+            raw = re.sub(r"\s+", "", m.group(1))
+            try:
+                val = int(raw)
+                if "тыс" in (m.group(0) or ""):
+                    val *= 1000
+                if 1000 <= val <= 900000:
+                    return val
+            except ValueError:
+                pass
+    return None
 
 
-def is_damaged(title, description=""):
-    text = (title + " " + (description or "")).lower()
-    for word in DAMAGE_KEYWORDS:
-        if word in text:
-            return True
-    return False
+def extract_engine(text):
+    """Объём двигателя примерно: 1.6, 2.0, 3.5 и т.д."""
+    if not text:
+        return None
+    m = re.search(r"\b([1-6][.,]\d)\s*(л|l|cci|куб)?\b", text.lower())
+    if m:
+        return m.group(1).replace(",", ".")
+    m = re.search(r"\b([1-6]\.\d)\b", text.lower())
+    return m.group(1) if m else None
 
 
-def is_installment(title, description=""):
-    text = (title + " " + (description or "")).lower()
-    for word in INSTALLMENT_KEYWORDS:
-        if word in text:
-            return True
-    return False
+def extract_fuel(text):
+    t = (text or "").lower()
+    if any(x in t for x in ["дизел", "diesel", "дизель"]):
+        return "diesel"
+    if any(x in t for x in ["гибрид", "hybrid"]):
+        return "hybrid"
+    if any(x in t for x in ["электро", "electric", "ev "]):
+        return "electric"
+    if any(x in t for x in ["бензин", "petrol", "gas"]):
+        return "petrol"
+    return None
 
 
-def is_order_car(title, description=""):
-    text = (title + " " + (description or "")).lower()
-    for word in ORDER_KEYWORDS:
-        if word in text:
-            return True
-    return False
+def extract_transmission(text):
+    t = (text or "").lower()
+    if any(x in t for x in ["акпп", "автомат", "automatic", "cvt", "вариатор", "робот"]):
+        return "auto"
+    if any(x in t for x in ["мкпп", "механика", "механич", "manual"]):
+        return "manual"
+    return None
 
 
-def is_not_cleared(title, description=""):
-    text = (title + " " + (description or "")).lower()
-    for word in NOT_CLEARED_KEYWORDS:
-        if word in text:
-            return True
-    return False
+def extract_drive(text):
+    t = (text or "").lower()
+    if any(x in t for x in ["полный", "4wd", "awd", "4x4", "полный привод"]):
+        return "awd"
+    if any(x in t for x in ["передний", "fwd"]):
+        return "fwd"
+    if any(x in t for x in ["задний", "rwd"]):
+        return "rwd"
+    return None
 
 
-def is_urgent(title, description=""):
-    text = (title + " " + (description or "")).lower()
-    for word in URGENT_KEYWORDS:
-        if word in text:
-            return True
-    return False
+def extract_body(text):
+    t = (text or "").lower()
+    mapping = [
+        ("седан", "sedan"),
+        ("хетч", "hatch"),
+        ("хэтч", "hatch"),
+        ("универсал", "wagon"),
+        ("внедорожник", "suv"),
+        ("кроссовер", "suv"),
+        ("suv", "suv"),
+        ("минивэн", "mpv"),
+        ("минивен", "mpv"),
+        ("пикап", "pickup"),
+        ("купе", "coupe"),
+        ("кабрио", "cabrio"),
+    ]
+    for k, v in mapping:
+        if k in t:
+            return v
+    return None
 
 
 def get_clean_price_usd(ad):
     price = ad.get("price")
     if price is None:
         return None
-
     try:
         price = float(price)
     except (ValueError, TypeError):
         return None
-
     currency = (ad.get("currency") or "").upper().strip()
     symbol = (ad.get("symbol") or "").upper().strip()
-
     if currency in ("USD", "$") or symbol in ("$", "USD"):
         usd = price
     elif currency in ("KGS", "COM", "СОМ", "SOM") or symbol in ("COM", "С", "СОМ", "SOM"):
         usd = price / USD_KGS_RATE
     else:
-        if price >= 80000:
-            usd = price / USD_KGS_RATE
-        else:
-            usd = price
-
-    if usd is None or usd < 1500 or usd > 90000:
+        usd = price / USD_KGS_RATE if price >= 80000 else price
+    if usd is None or usd < 1500 or usd > 100000:
         return None
-
     return round(usd)
 
 
-def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
+def parse_ad_specs(ad):
+    """Собрать характеристики объявления для сопоставления."""
+    title = ad.get("title") or ""
+    desc = ad.get("description") or ""
+    blob = f"{title} {desc}"
+    make, model = extract_make_model(title)
+    return {
+        "make": make,
+        "model": model,
+        "year": extract_year(title),
+        "mileage": extract_mileage(blob),
+        "engine": extract_engine(blob),
+        "fuel": extract_fuel(blob),
+        "transmission": extract_transmission(blob),
+        "drive": extract_drive(blob),
+        "body": extract_body(blob),
+        "price": get_clean_price_usd(ad),
+        "title": title,
+        "description": desc,
+        "ad": ad,
+    }
+
+
+def is_bad_listing(title, description=""):
+    blob = f"{title} {description}"
+    if text_has(title, JUNK_KEYWORDS):
+        return True
+    if text_has(blob, DAMAGE_KEYWORDS):
+        return True
+    if text_has(blob, INSTALLMENT_KEYWORDS):
+        return True
+    if text_has(blob, ORDER_KEYWORDS):
+        return True
+    if text_has(blob, NOT_CLEARED_KEYWORDS):
+        return True
+    return False
+
+
+def get_ads(page=1, q=None, per_page=50, year_from=None, year_to=None):
     params = {
         "per-page": per_page,
         "page": page,
@@ -295,88 +361,143 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
         params["parameters[62][from]"] = year_from
     if year_to:
         params["parameters[62][to]"] = year_to
-
     try:
         r = requests.get(
             "https://api.lalafo.com/v3/ads/search",
             params=params,
             headers=HEADERS,
-            timeout=15
+            timeout=15,
         )
         if r.status_code == 200:
             return r.json().get("items", [])
-        print("Lalafo status:", r.status_code, r.text[:150])
     except Exception as e:
-        print("Ошибка запроса к Lalafo:", e)
+        print("Lalafo error:", e)
     return []
 
 
-def remove_outliers(prices):
+def specs_match(target, cand):
+    """
+    Максимально похожие аналоги:
+    brand + model + year±1 + (engine/fuel/trans/body/drive если есть) + mileage±30%.
+    Обязательны: make, model (базово), year±1.
+    Остальное — если указано у обоих, должно совпадать.
+    """
+    if not target.get("make") or not cand.get("make"):
+        return False
+    if target["make"] != cand["make"] and target["make"] not in (cand["make"] or "") and (cand["make"] or "") not in target["make"]:
+        return False
+
+    # model: хотя бы первое слово модели
+    t_model = (target.get("model") or "").split()
+    c_model = (cand.get("model") or "").split()
+    if t_model and c_model:
+        if t_model[0] != c_model[0]:
+            return False
+    elif t_model and not c_model:
+        return False
+
+    ty, cy = target.get("year"), cand.get("year")
+    if ty and cy and abs(ty - cy) > YEAR_TOLERANCE:
+        return False
+    if ty and not cy:
+        return False
+
+    # Опциональные поля — только если есть у обоих
+    for key in ("engine", "fuel", "transmission", "body", "drive"):
+        tv, cv = target.get(key), cand.get(key)
+        if tv and cv and tv != cv:
+            return False
+
+    tm, cm = target.get("mileage"), cand.get("mileage")
+    if tm and cm and tm > 0:
+        if abs(cm - tm) / tm > MILEAGE_TOLERANCE:
+            return False
+
+    return True
+
+
+def remove_price_outliers(prices):
+    """Убрать слишком дорогие и подозрительно дешёвые."""
     if len(prices) < 4:
         return prices
     med = statistics.median(prices)
-    filtered = [p for p in prices if med * 0.40 <= p <= med * 1.35]
-    return filtered if len(filtered) >= 3 else prices
+    # жёстче сверху (дорогие «хотелки»), мягче снизу но режем явный мусор
+    low, high = med * 0.55, med * 1.28
+    cleaned = [p for p in prices if low <= p <= high]
+    return cleaned if len(cleaned) >= 3 else prices
 
 
 def percentile(data, percent):
     if not data:
         return None
-    size = len(data)
-    sorted_data = sorted(data)
-    index = (size - 1) * percent / 100
-    floor = int(index)
-    ceil = min(floor + 1, size - 1)
-    if floor == ceil:
-        return sorted_data[floor]
-    return sorted_data[floor] * (ceil - index) + sorted_data[ceil] * (index - floor)
+    s = sorted(data)
+    n = len(s)
+    idx = (n - 1) * percent / 100
+    f, c = int(idx), min(int(idx) + 1, n - 1)
+    if f == c:
+        return s[f]
+    return s[f] * (c - idx) + s[c] * (idx - f)
 
 
-def get_market_price(make, model, year):
-    if not make:
-        return None, 0, None
+def calc_real_quick_sell_price(comparable_prices):
+    """
+    REAL_QUICK_SELL_PRICE — цена, по которой реально быстро уйдёт.
+    Не среднее. Консервативный низ нормального очищенного рынка.
+    """
+    cleaned = remove_price_outliers(comparable_prices)
+    if len(cleaned) < MIN_COMPARABLES:
+        return None, cleaned
+    return percentile(cleaned, QUICK_SELL_PERCENTILE), cleaned
+
+
+def calc_max_buy_price(quick_sell):
+    """
+    MAX_BUY_PRICE =
+      REAL_QUICK_SELL
+      - EXPENSES
+      - NEGOTIATION_RESERVE
+      - REQUIRED_PROFIT
+    """
+    if not quick_sell or quick_sell <= 0:
+        return None
+    after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
+    max_buy = after_reserve - EXPENSES_USD - REQUIRED_PROFIT_USD
+    # доп. проверка доли прибыли
+    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO:
+        max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - EXPENSES_USD
+    return max(0, round(max_buy))
+
+
+def find_comparables(target_specs):
+    """Собрать максимально похожие объявления."""
+    make = target_specs.get("make")
+    model = target_specs.get("model")
+    year = target_specs.get("year")
+    if not make or not year:
+        return []
 
     query = make
     if model:
-        first_model = model.split()[0]
-        if len(first_model) > 1:
-            query += " " + first_model
+        query += " " + model.split()[0]
 
-    year_from = max(year - 4, 1985) if year else None
-    year_to = year + 4 if year else None
+    year_from = max(year - YEAR_TOLERANCE, 1985)
+    year_to = year + YEAR_TOLERANCE
 
-    # Одна страница — быстрее
-    items = get_ads(q=query, per_page=50, year_from=year_from, year_to=year_to)
+    items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
+    # вторая страница для плотности рынка
+    items += get_ads(page=2, q=query, per_page=40, year_from=year_from, year_to=year_to)
 
-    prices = []
-
+    comps = []
     for item in items:
-        if is_junk_title(item.get("title", "")):
+        if is_bad_listing(item.get("title") or "", item.get("description") or ""):
             continue
-        if is_damaged(item.get("title", ""), item.get("description", "")):
+        sp = parse_ad_specs(item)
+        if not sp["price"]:
             continue
-
-        item_year = extract_year(item.get("title", ""))
-        if year and item_year and abs(item_year - year) > 4:
+        if not specs_match(target_specs, sp):
             continue
-
-        item_make, _ = extract_make_model(item.get("title", ""))
-        if item_make and make and item_make != make and make not in item_make and item_make not in make:
-            continue
-
-        price = get_clean_price_usd(item)
-        if price and 1500 < price < 90000:
-            prices.append(price)
-
-    prices = remove_outliers(prices)
-
-    if len(prices) < MIN_SIMILAR_ADS:
-        return None, len(prices), None
-
-    market_hard = percentile(prices, MARKET_PERCENTILE)
-    market_median = statistics.median(prices)
-
-    return market_hard, len(prices), market_median
+        comps.append(sp)
+    return comps
 
 
 def analyze_and_notify(ad, seen):
@@ -384,86 +505,47 @@ def analyze_and_notify(ad, seen):
     if ad_id in seen:
         return
 
-    title = ad.get("title") or "Без названия"
+    title = ad.get("title") or ""
     description = ad.get("description") or ""
 
-    if is_junk_title(title):
+    if is_bad_listing(title, description):
         seen.add(ad_id)
         return
 
-    if is_damaged(title, description):
+    target = parse_ad_specs(ad)
+    if not target["price"] or not target["make"] or not target["year"]:
+        seen.add(ad_id)
+        return
+    if target["year"] < MIN_YEAR:
         seen.add(ad_id)
         return
 
-    if is_installment(title, description):
+    comps = find_comparables(target)
+    prices = [c["price"] for c in comps if c.get("price")]
+
+    quick_sell, cleaned = calc_real_quick_sell_price(prices)
+    if quick_sell is None:
+        print(f"  skip (мало данных): {title[:40]} | comps={len(prices)}")
         seen.add(ad_id)
         return
 
-    if is_order_car(title, description):
+    max_buy = calc_max_buy_price(quick_sell)
+    if max_buy is None or max_buy <= 0:
         seen.add(ad_id)
         return
 
-    if is_not_cleared(title, description):
+    seller = target["price"]
+
+    # ГЛАВНОЕ ПРАВИЛО
+    if seller > max_buy:
+        print(f"  skip (дорого): {title[:35]} | ask={seller}$ max_buy={max_buy}$ qs={quick_sell:.0f}$")
         seen.add(ad_id)
         return
 
-    year = extract_year(title)
-    if year is None or year < MIN_YEAR:
-        seen.add(ad_id)
-        return
-
-    price_usd = get_clean_price_usd(ad)
-    if not price_usd:
-        seen.add(ad_id)
-        return
-
-    make, model = extract_make_model(title)
-    if not make:
-        seen.add(ad_id)
-        return
-
-    market_price, count, market_median = get_market_price(make, model, year)
-
-    if not market_price or count < MIN_SIMILAR_ADS:
-        # Не молчим — логируем почему пропустили
-        print(f"  skip (market): {title[:40]} | similar={count}")
-        seen.add(ad_id)
-        return
-
-    asking = price_usd
-    wholesale_target = market_price * (1 - WHOLESALE_MARGIN)
-    discount = (market_price - asking) / market_price
-    potential_profit = market_price - asking
-
-    urgent = is_urgent(title, description)
-    is_preferred = make in PREFERRED_MAKES
-    is_strict = make in STRICT_MAKES
-
-    if is_preferred:
-        min_discount = 0.08
-        max_ask_ratio = 1.12
-    elif is_strict:
-        min_discount = 0.14
-        max_ask_ratio = 1.06
-    else:
-        min_discount = MIN_DISCOUNT_TO_NOTIFY
-        max_ask_ratio = 1.10
-
-    is_excellent_deal = (
-        discount >= min_discount and
-        asking <= wholesale_target * max_ask_ratio
-    )
-
-    if urgent and discount >= 0.08:
-        is_excellent_deal = True
-
-    if potential_profit < MIN_PROFIT:
-        is_excellent_deal = False
-
-    if not is_excellent_deal:
-        print(f"  skip (deal): {title[:40]} | disc={discount*100:.1f}% | profit={potential_profit:.0f}$")
-        seen.add(ad_id)
-        return
+    # REAL_BUY
+    expected_profit = quick_sell - seller - EXPENSES_USD
+    margin_pct = (expected_profit / quick_sell * 100) if quick_sell else 0
+    urgent = text_has(f"{title} {description}", URGENT_KEYWORDS)
 
     url = "https://lalafo.kg" + (ad.get("url") or "")
     city = ad.get("city") or "Бишкек"
@@ -471,79 +553,61 @@ def analyze_and_notify(ad, seen):
     if ad.get("images"):
         photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
 
-    price_kgs = round(asking * USD_KGS_RATE)
-    market_kgs = round(market_price * USD_KGS_RATE)
-    wholesale_kgs = round(wholesale_target * USD_KGS_RATE)
-    median_kgs = round(market_median * USD_KGS_RATE) if market_median else 0
+    seller_kgs = round(seller * USD_KGS_RATE)
+    max_buy_kgs = round(max_buy * USD_KGS_RATE)
+    qs_kgs = round(quick_sell * USD_KGS_RATE)
 
-    urgent_mark = "⚡ <b>СРОЧНО!</b>\n" if urgent else ""
-
+    urgent_mark = "⚡ <b>СРОЧНО</b>\n" if urgent else ""
     text = (
         f"{urgent_mark}"
-        f"🔥 <b>ВЫГОДНО ДЛЯ ПЕРЕКУПА</b>\n\n"
+        f"✅ <b>REAL BUY — МОЖНО ЗАБИРАТЬ</b>\n\n"
         f"<b>{title}</b>\n"
         f"📍 {city}\n\n"
-        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (~{asking:.0f}$)\n"
-        f"📊 <b>Рыночная ({MARKET_PERCENTILE}%):</b> ~{market_kgs:,.0f} сом  (~{market_price:.0f}$)\n"
-        f"📈 Медиана: ~{median_kgs:,.0f} сом\n"
-        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> ~{wholesale_kgs:,.0f} сом  (~{wholesale_target:.0f}$)\n\n"
-        f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
-        f"💵 Потенциал: <b>~{potential_profit:.0f}$</b>\n"
-        f"🔍 Похожих: {count}\n\n"
+        f"💰 <b>Цена продавца:</b> {seller_kgs:,.0f} сом (~{seller}$)\n"
+        f"🛒 <b>MAX BUY (твой потолок):</b> {max_buy_kgs:,.0f} сом (~{max_buy}$)\n"
+        f"🏷 <b>Быстрая продажа (ориентир):</b> ~{qs_kgs:,.0f} сом (~{quick_sell:.0f}$)\n\n"
+        f"📉 Запас до потолка: <b>{max_buy - seller}$</b>\n"
+        f"💵 Ожид. прибыль после расходов: <b>~{expected_profit:.0f}$</b> ({margin_pct:.0f}%)\n"
+        f"🔧 Расходы заложены: {EXPENSES_USD}$ | резерв торга {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {REQUIRED_PROFIT_USD}$\n"
+        f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)})\n\n"
         f"<a href='{url}'>Открыть объявление</a>"
     )
 
     send_telegram(text, photo)
-    status = "СРОЧНО" if urgent else "ВЫГОДНО"
-    print(f"[{datetime.now()}] 🔥 {status} | {title[:50]} | −{discount*100:.1f}% | +{potential_profit:.0f}$")
-
+    print(f"[{datetime.now()}] REAL_BUY | {title[:40]} | ask={seller}$ max={max_buy}$ profit~{expected_profit:.0f}$")
     seen.add(ad_id)
 
 
 def main():
-    print("Бот перекупа запущен...")
+    print("Бот REAL_BUY / MAX_BUY запущен...")
     send_telegram(
-        f"✅ <b>Бот обновлён v4</b>\n\n"
-        f"• Проверка каждые {CHECK_INTERVAL} сек\n"
-        f"• Мягче пороги скидки\n"
-        f"• Битые / рассрочка / заказ / нерастаможенные — отсекаются\n"
-        f"• Год от {MIN_YEAR}+"
+        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>\n\n"
+        f"✅ Алгоритм скупки активен\n"
+        f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLERANCE*100)}%\n"
+        f"• Быстрая продажа = {QUICK_SELL_PERCENTILE}-й перцентиль\n"
+        f"• MAX_BUY = продажа − {EXPENSES_USD}$ − торг {int(NEGOTIATION_RESERVE*100)}% − прибыль {REQUIRED_PROFIT_USD}$\n"
+        f"• Кидаю только если цена ≤ MAX_BUY"
     )
-
     seen = load_seen()
-    print(f"Загружено seen: {len(seen)}")
+    print(f"seen={len(seen)}")
 
     while True:
         try:
-            print(f"\n[{datetime.now()}] Проверяю новые объявления...")
+            print(f"\n[{datetime.now()}] Проверка...")
             ads = get_ads(page=1, per_page=40)
-            print(f"Получено объявлений: {len(ads)}")
-
+            print(f"Новых с ленты: {len(ads)}")
             if not ads:
-                print("Пустой ответ от Lalafo, жду...")
                 time.sleep(CHECK_INTERVAL)
                 continue
 
-            urgent_ads = []
-            normal_ads = []
-
             for ad in ads:
-                title = ad.get("title") or ""
-                desc = ad.get("description") or ""
-                if is_urgent(title, desc):
-                    urgent_ads.append(ad)
-                else:
-                    normal_ads.append(ad)
-
-            for ad in urgent_ads + normal_ads:
                 analyze_and_notify(ad, seen)
 
             save_seen(seen)
-            print(f"Цикл готов. seen={len(seen)}. Сон {CHECK_INTERVAL}с")
+            print(f"Цикл OK, сон {CHECK_INTERVAL}с")
             time.sleep(CHECK_INTERVAL)
-
         except Exception as e:
-            print("Ошибка в основном цикле:", e)
+            print("Ошибка:", e)
             time.sleep(20)
 
 
