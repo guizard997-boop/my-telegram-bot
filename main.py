@@ -10,15 +10,16 @@ from datetime import datetime
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 25
+CHECK_INTERVAL = 45                # быстрее проверка (было 90)
 MIN_YEAR = 2005
-WHOLESALE_MARGIN = 0.20
-MIN_DISCOUNT_TO_NOTIFY = 0.12
-MIN_SIMILAR_ADS = 5
+WHOLESALE_MARGIN = 0.18
+MIN_DISCOUNT_TO_NOTIFY = 0.10      # мягче
+MIN_SIMILAR_ADS = 4
 CITY_ID = 103184
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
-MARKET_PERCENTILE = 15
+MARKET_PERCENTILE = 18
+MIN_PROFIT = 500                   # было 800
 
 PREFERRED_MAKES = {
     "toyota", "lexus", "bmw", "mercedes", "mercedes-benz", "audi",
@@ -57,12 +58,11 @@ JUNK_KEYWORDS = [
 
 DAMAGE_KEYWORDS = [
     "битый", "битая", "битое", "бит", "после дтп", "после аварии",
-    "аварийный", "аварийная", "дtp", "дтп", "не на ходу", "не находу",
+    "аварийный", "аварийная", "дтп", "не на ходу", "не находу",
     "под восстановление", "на запчасти", "на запчасть", "требует ремонта",
-    "нужен ремонт", "кузовной", "после удара", "удар в", "вмятин",
-    "скручен", "скрутка", "некондиция", "не кондиция", "на разбор",
-    "распил", "каркас", "только на запчасти", "без документов",
-    "проблемы с документами", "конструктор", "распилен"
+    "нужен ремонт", "кузовной", "после удара", "вмятин",
+    "скручен", "скрутка", "некондиция", "на разбор",
+    "распил", "каркас", "только на запчасти", "конструктор", "распилен"
 ]
 
 INSTALLMENT_KEYWORDS = [
@@ -146,7 +146,9 @@ def send_telegram(text, photo_url=None):
             }
         r = requests.post(url, data=data, timeout=15)
         if r.status_code != 200:
-            print("Telegram error:", r.text[:200])
+            print("Telegram error:", r.text[:300])
+        else:
+            print("Telegram OK")
     except Exception as e:
         print("Ошибка отправки в Telegram:", e)
 
@@ -262,7 +264,7 @@ def get_clean_price_usd(ad):
     currency = (ad.get("currency") or "").upper().strip()
     symbol = (ad.get("symbol") or "").upper().strip()
 
-    if currency in ("USD", "\( ") or symbol in (" \)", "USD"):
+    if currency in ("USD", "$") or symbol in ("$", "USD"):
         usd = price
     elif currency in ("KGS", "COM", "СОМ", "SOM") or symbol in ("COM", "С", "СОМ", "SOM"):
         usd = price / USD_KGS_RATE
@@ -272,7 +274,7 @@ def get_clean_price_usd(ad):
         else:
             usd = price
 
-    if usd is None or usd < 2000 or usd > 90000:
+    if usd is None or usd < 1500 or usd > 90000:
         return None
 
     return round(usd)
@@ -299,21 +301,22 @@ def get_ads(page=1, q=None, per_page=40, year_from=None, year_to=None):
             "https://api.lalafo.com/v3/ads/search",
             params=params,
             headers=HEADERS,
-            timeout=20
+            timeout=15
         )
         if r.status_code == 200:
             return r.json().get("items", [])
+        print("Lalafo status:", r.status_code, r.text[:150])
     except Exception as e:
         print("Ошибка запроса к Lalafo:", e)
     return []
 
 
 def remove_outliers(prices):
-    if len(prices) < 5:
+    if len(prices) < 4:
         return prices
     med = statistics.median(prices)
-    filtered = [p for p in prices if med * 0.40 <= p <= med * 1.30]
-    return filtered if len(filtered) >= 4 else prices
+    filtered = [p for p in prices if med * 0.40 <= p <= med * 1.35]
+    return filtered if len(filtered) >= 3 else prices
 
 
 def percentile(data, percent):
@@ -339,11 +342,11 @@ def get_market_price(make, model, year):
         if len(first_model) > 1:
             query += " " + first_model
 
-    year_from = max(year - 3, 1985) if year else None
-    year_to = year + 3 if year else None
+    year_from = max(year - 4, 1985) if year else None
+    year_to = year + 4 if year else None
 
-    items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
-    items += get_ads(page=2, q=query, per_page=40, year_from=year_from, year_to=year_to)
+    # Одна страница — быстрее
+    items = get_ads(q=query, per_page=50, year_from=year_from, year_to=year_to)
 
     prices = []
 
@@ -354,7 +357,7 @@ def get_market_price(make, model, year):
             continue
 
         item_year = extract_year(item.get("title", ""))
-        if year and item_year and abs(item_year - year) > 3:
+        if year and item_year and abs(item_year - year) > 4:
             continue
 
         item_make, _ = extract_make_model(item.get("title", ""))
@@ -362,7 +365,7 @@ def get_market_price(make, model, year):
             continue
 
         price = get_clean_price_usd(item)
-        if price and 2000 < price < 90000:
+        if price and 1500 < price < 90000:
             prices.append(price)
 
     prices = remove_outliers(prices)
@@ -422,6 +425,8 @@ def analyze_and_notify(ad, seen):
     market_price, count, market_median = get_market_price(make, model, year)
 
     if not market_price or count < MIN_SIMILAR_ADS:
+        # Не молчим — логируем почему пропустили
+        print(f"  skip (market): {title[:40]} | similar={count}")
         seen.add(ad_id)
         return
 
@@ -435,27 +440,28 @@ def analyze_and_notify(ad, seen):
     is_strict = make in STRICT_MAKES
 
     if is_preferred:
-        min_discount = 0.10
-        max_ask_ratio = 1.10
+        min_discount = 0.08
+        max_ask_ratio = 1.12
     elif is_strict:
-        min_discount = 0.18
-        max_ask_ratio = 1.05
+        min_discount = 0.14
+        max_ask_ratio = 1.06
     else:
         min_discount = MIN_DISCOUNT_TO_NOTIFY
-        max_ask_ratio = 1.08
+        max_ask_ratio = 1.10
 
     is_excellent_deal = (
         discount >= min_discount and
         asking <= wholesale_target * max_ask_ratio
     )
 
-    if urgent and discount >= (0.10 if is_preferred else 0.14):
+    if urgent and discount >= 0.08:
         is_excellent_deal = True
 
-    if potential_profit < 800:
+    if potential_profit < MIN_PROFIT:
         is_excellent_deal = False
 
     if not is_excellent_deal:
+        print(f"  skip (deal): {title[:40]} | disc={discount*100:.1f}% | profit={potential_profit:.0f}$")
         seen.add(ad_id)
         return
 
@@ -477,12 +483,12 @@ def analyze_and_notify(ad, seen):
         f"🔥 <b>ВЫГОДНО ДЛЯ ПЕРЕКУПА</b>\n\n"
         f"<b>{title}</b>\n"
         f"📍 {city}\n\n"
-        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (\~{asking:.0f}$)\n"
-        f"📊 <b>Рыночная ({MARKET_PERCENTILE}%):</b> \~{market_kgs:,.0f} сом  (\~{market_price:.0f}$)\n"
-        f"📈 Медиана: \~{median_kgs:,.0f} сом\n"
-        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> \~{wholesale_kgs:,.0f} сом  (\~{wholesale_target:.0f}$)\n\n"
+        f"💰 <b>Цена продавца:</b> {price_kgs:,.0f} сом  (~{asking:.0f}$)\n"
+        f"📊 <b>Рыночная ({MARKET_PERCENTILE}%):</b> ~{market_kgs:,.0f} сом  (~{market_price:.0f}$)\n"
+        f"📈 Медиана: ~{median_kgs:,.0f} сом\n"
+        f"🛒 <b>Скупочная цель (−{int(WHOLESALE_MARGIN*100)}%):</b> ~{wholesale_kgs:,.0f} сом  (~{wholesale_target:.0f}$)\n\n"
         f"📉 Ниже рынка на: <b>{discount*100:.1f}%</b>\n"
-        f"💵 Потенциал: <b>\~{potential_profit:.0f}$</b>\n"
+        f"💵 Потенциал: <b>~{potential_profit:.0f}$</b>\n"
         f"🔍 Похожих: {count}\n\n"
         f"<a href='{url}'>Открыть объявление</a>"
     )
@@ -497,19 +503,26 @@ def analyze_and_notify(ad, seen):
 def main():
     print("Бот перекупа запущен...")
     send_telegram(
-        f"✅ <b>Бот обновлён v3</b>\n\n"
-        f"• Корейцы и дешёвый сегмент — только при сильной скидке\n"
-        f"• Битые / после ДТП / не на ходу — отсекаются\n"
-        f"• Год от {MIN_YEAR}+\n"
-        f"• Скупочная: −{int(WHOLESALE_MARGIN*100)}%, перцентиль {MARKET_PERCENTILE}"
+        f"✅ <b>Бот обновлён v4</b>\n\n"
+        f"• Проверка каждые {CHECK_INTERVAL} сек\n"
+        f"• Мягче пороги скидки\n"
+        f"• Битые / рассрочка / заказ / нерастаможенные — отсекаются\n"
+        f"• Год от {MIN_YEAR}+"
     )
 
     seen = load_seen()
+    print(f"Загружено seen: {len(seen)}")
 
     while True:
         try:
-            print(f"[{datetime.now()}] Проверяю новые объявления...")
-            ads = get_ads(page=1, per_page=50)
+            print(f"\n[{datetime.now()}] Проверяю новые объявления...")
+            ads = get_ads(page=1, per_page=40)
+            print(f"Получено объявлений: {len(ads)}")
+
+            if not ads:
+                print("Пустой ответ от Lalafo, жду...")
+                time.sleep(CHECK_INTERVAL)
+                continue
 
             urgent_ads = []
             normal_ads = []
@@ -526,11 +539,12 @@ def main():
                 analyze_and_notify(ad, seen)
 
             save_seen(seen)
+            print(f"Цикл готов. seen={len(seen)}. Сон {CHECK_INTERVAL}с")
             time.sleep(CHECK_INTERVAL)
 
         except Exception as e:
             print("Ошибка в основном цикле:", e)
-            time.sleep(30)
+            time.sleep(20)
 
 
 if __name__ == "__main__":
