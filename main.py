@@ -600,7 +600,7 @@ def calc_max_buy_price(quick_sell, expenses=None, required_profit=None):
     profit = REQUIRED_PROFIT_USD if required_profit is None else required_profit
     after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
     max_buy = after_reserve - exp - profit
-    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO:
+    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell< MIN_PROFIT_RATIO:
         max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - exp
     return max(0, round(max_buy))
 
@@ -769,14 +769,7 @@ def analyze_and_notify(ad, seen):
 def main():
     print("Бот REAL_BUY / MAX_BUY запущен...")
     send_telegram(
-        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>\n\n"
-        f"✅ Алгоритм скупки активен\n"
-        f"⭐ Приоритет: <b>Camry Hybrid 70</b> (2017–2024)\n"
-        f"🌐 Рынок: Lalafo + Mashina.kg (вариант B)\n"
-        f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLERANCE*100)}%\n"
-        f"• Быстрая продажа = {QUICK_SELL_PERCENTILE}-й перцентиль\n"
-        f"• MAX_BUY = продажа − расходы − торг − прибыль\n"
-        f"• Кидаю только если цена ≤ MAX_BUY"
+        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>"
     )
     seen = load_seen()
     print(f"seen={len(seen)}")
