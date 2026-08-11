@@ -612,9 +612,8 @@ def analyze_and_notify(ad, seen):
     quick_sell, cleaned = calc_real_quick_sell_price(prices, min_comps=min_comps)
     if quick_sell is None:
         print(f"  skip (мало данных): {title[:40]} | comps={len(prices)} | priority={priority}")
-        seen.add(ad_id)
-        return
+        seen.add(ad_id); return
 
     max_buy = calc_max_buy_price(quick_sell, expenses=exp, required_profit=req_profit)
     if not max_buy:
- 
+        
