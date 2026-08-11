@@ -592,7 +592,7 @@ def fetch_mashina_feed(pages=2):
                     continue
                 title = _mashina_slug_to_title(slug)
                 results.append({
-                    "                    "id": f"mashina_{slug}",
+                    "id": f"mashina_{slug}",
                     "title": title,
                     "description": "",
                     "price": price,
