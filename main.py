@@ -490,6 +490,67 @@ def specs_match(target, cand):
     return True
 
 
+
+def fetch_mashina_market_prices(make, model, year=None, pages=2):
+    """Цены похожих авто с Mashina.kg для общего рынка (вариант B)."""
+    if not make:
+        return []
+    q = make
+    if model:
+        q += " " + model.split()[0]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9",
+    }
+    prices = []
+    for page in range(1, pages + 1):
+        url = f"https://www.mashina.kg/search/all/?q={requests.utils.quote(q)}&currency=2&page={page}"
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            if r.status_code != 200:
+                continue
+            html = r.text
+            links = list(dict.fromkeys(re.findall(r"/details/([a-z0-9\-]+)", html)))
+            raw_prices = re.findall(r"\$[\s\xa0\u00a0]?([\d\s\xa0\u00a0]+)", html)
+            parsed = []
+            for p in raw_prices:
+                digits = re.sub(r"\D", "", p)
+                if digits.isdigit():
+                    val = int(digits)
+                    if 1500 <= val <= 100000:
+                        parsed.append(val)
+            # парим по порядку: ссылка ~ цена
+            make_l = make.lower().replace(" ", "-")
+            model_token = (model or "").split()[0].lower() if model else ""
+            for i, slug in enumerate(links):
+                slug_l = slug.lower()
+                if make_l not in slug_l and make.lower() not in slug_l:
+                    # slug вида toyota-camry-...
+                    if make.lower() not in slug_l:
+                        continue
+                if model_token and model_token not in slug_l and model_token not in ("hybrid", "гибрид"):
+                    # для hybrid camry slug может быть toyota-camry-...
+                    if model_token == "camry" and "camry" not in slug_l:
+                        continue
+                    if model_token not in ("camry",) and model_token not in slug_l:
+                        continue
+                if year:
+                    # год в тексте рядом редко; не режем жёстко
+                    pass
+                if i < len(parsed):
+                    prices.append(parsed[i])
+        except Exception as e:
+            print("Mashina error:", e)
+    return prices
+
+
+def fetch_bazar_market_prices(make, model, year=None):
+    """Заготовка под Bazar.kg — сайт нестабилен для авто, возвращаем []."""
+    # Bazar.kg сейчас без удобной категории авто/API.
+    # Оставляем хук, чтобы не ломать архитектуру варианта B.
+    return []
+
+
 def remove_price_outliers(prices):
     """Убрать слишком дорогие и подозрительно дешёвые."""
     if len(prices) < 4:
@@ -539,13 +600,12 @@ def calc_max_buy_price(quick_sell, expenses=None, required_profit=None):
     profit = REQUIRED_PROFIT_USD if required_profit is None else required_profit
     after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
     max_buy = after_reserve - exp - profit
-    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO:
-        max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - exp
+    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell * (1 - MIN_PROFIT_RATIO) - exp
     return max(0, round(max_buy))
 
 
 def find_comparables(target_specs):
-    """Собрать максимально похожие объявления."""
+    """Собрать похожие объявления: Lalafo + Mashina (+ Bazar hook) — вариант B."""
     make = target_specs.get("make")
     model = target_specs.get("model")
     year = target_specs.get("year")
@@ -556,7 +616,6 @@ def find_comparables(target_specs):
     if model:
         query += " " + model.split()[0]
 
-    # Для Camry Hybrid — уточняем запрос, чтобы аналоги были точнее
     blob_model = f"{model or ''} {target_specs.get('fuel') or ''}".lower()
     if make == "toyota" and ("camry" in (model or "") or "камри" in (model or "")):
         if target_specs.get("fuel") == "hybrid" or "hybrid" in blob_model or "гибрид" in blob_model:
@@ -577,7 +636,48 @@ def find_comparables(target_specs):
             continue
         if not specs_match(target_specs, sp):
             continue
+        sp["source"] = "lalafo"
         comps.append(sp)
+
+    # --- Mashina.kg prices into market pool ---
+    mashina_prices = fetch_mashina_market_prices(make, model, year)
+    for p in mashina_prices:
+        comps.append({
+            "make": make,
+            "model": model,
+            "year": year,
+            "price": p,
+            "source": "mashina",
+            "title": f"{make} {model or ''} mashina",
+            "description": "",
+            "mileage": None,
+            "engine": None,
+            "fuel": target_specs.get("fuel"),
+            "transmission": None,
+            "drive": None,
+            "body": None,
+            "ad": None,
+        })
+
+    # --- Bazar.kg hook (пока пусто) ---
+    for p in fetch_bazar_market_prices(make, model, year):
+        comps.append({
+            "make": make,
+            "model": model,
+            "year": year,
+            "price": p,
+            "source": "bazar",
+            "title": f"{make} {model or ''} bazar",
+            "description": "",
+            "mileage": None,
+            "engine": None,
+            "fuel": None,
+            "transmission": None,
+            "drive": None,
+            "body": None,
+            "ad": None,
+        })
+
     return comps
 
 
@@ -608,6 +708,8 @@ def analyze_and_notify(ad, seen):
 
     comps = find_comparables(target)
     prices = [c["price"] for c in comps if c.get("price")]
+    src_lalafo = sum(1 for c in comps if c.get("source") == "lalafo")
+    src_mashina = sum(1 for c in comps if c.get("source") == "mashina")
 
     quick_sell, cleaned = calc_real_quick_sell_price(prices, min_comps=min_comps)
     if quick_sell is None:
@@ -653,7 +755,7 @@ def analyze_and_notify(ad, seen):
         f"📉 Запас до потолка: <b>{max_buy - seller}$</b>\n"
         f"💵 Ожид. прибыль после расходов: <b>~{expected_profit:.0f}$</b> ({margin_pct:.0f}%)\n"
         f"🔧 Расходы: {exp}$ | торг {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {req_profit}$\n"
-        f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)})\n\n"
+        f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)}) | Lalafo:{src_lalafo} Mashina:{src_mashina}\n\n"
         f"<a href='{url}'>Открыть объявление</a>"
     )
 
@@ -669,6 +771,7 @@ def main():
         "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>\n\n"
         f"✅ Алгоритм скупки активен\n"
         f"⭐ Приоритет: <b>Camry Hybrid 70</b> (2017–2024)\n"
+        f"🌐 Рынок: Lalafo + Mashina.kg (вариант B)\n"
         f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLERANCE*100)}%\n"
         f"• Быстрая продажа = {QUICK_SELL_PERCENTILE}-й перцентиль\n"
         f"• MAX_BUY = продажа − расходы − торг − прибыль\n"
@@ -699,4 +802,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+ 
