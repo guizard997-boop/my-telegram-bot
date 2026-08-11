@@ -616,4 +616,5 @@ def analyze_and_notify(ad, seen):
         return
 
     max_buy = calc_max_buy_price(quick_sell, expenses=exp, required_profit=req_profit)
-    if max_buy is None
+    if not max_buy:
+ 
