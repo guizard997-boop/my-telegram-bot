@@ -544,256 +544,52 @@ def fetch_mashina_market_prices(make, model, year=None, pages=2):
     return prices
 
 
-def fetch_bazar_market_prices(make, model, year=None):
-    """Заготовка под Bazar.kg — сайт нестабилен для авто, возвращаем []."""
-    # Bazar.kg сейчас без удобной категории авто/API.
-    # Оставляем хук, чтобы не ломать архитектуру варианта B.
-    return []
+
+def _mashina_slug_to_title(slug):
+    """toyota-camry-hybrid-6a7b... -> Toyota Camry Hybrid"""
+    if not slug:
+        return "Авто Mashina"
+    parts = slug.split("-")
+    # убираем хвостовой id (hex/длинный)
+    while parts and (len(parts[-1]) >= 10 or re.fullmatch(r"[0-9a-f]{8,}", parts[-1])):
+        parts.pop()
+    if not parts:
+        return slug
+    return " ".join(p.capitalize() for p in parts)
 
 
-def remove_price_outliers(prices):
-    """Убрать слишком дорогие и подозрительно дешёвые."""
-    if len(prices) < 4:
-        return prices
-    med = statistics.median(prices)
-    # жёстче сверху (дорогие «хотелки»), мягче снизу но режем явный мусор
-    low, high = med * 0.55, med * 1.28
-    cleaned = [p for p in prices if low <= p <= high]
-    return cleaned if len(cleaned) >= 3 else prices
-
-
-def percentile(data, percent):
-    if not data:
-        return None
-    s = sorted(data)
-    n = len(s)
-    idx = (n - 1) * percent / 100
-    f, c = int(idx), min(int(idx) + 1, n - 1)
-    if f == c:
-        return s[f]
-    return s[f] * (c - idx) + s[c] * (idx - f)
-
-
-def calc_real_quick_sell_price(comparable_prices, min_comps=None):
-    """
-    REAL_QUICK_SELL_PRICE — цена, по которой реально быстро уйдёт.
-    Не среднее. Консервативный низ нормального очищенного рынка.
-    """
-    need = MIN_COMPARABLES if min_comps is None else min_comps
-    cleaned = remove_price_outliers(comparable_prices)
-    if len(cleaned) < need:
-        return None, cleaned
-    return percentile(cleaned, QUICK_SELL_PERCENTILE), cleaned
-
-
-def calc_max_buy_price(quick_sell, expenses=None, required_profit=None):
-    """
-    MAX_BUY_PRICE =
-      REAL_QUICK_SELL
-      - EXPENSES
-      - NEGOTIATION_RESERVE
-      - REQUIRED_PROFIT
-    """
-    if not quick_sell or quick_sell <= 0:
-        return None
-    exp = EXPENSES_USD if expenses is None else expenses
-    profit = REQUIRED_PROFIT_USD if required_profit is None else required_profit
-    after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
-    max_buy = after_reserve - exp - profit
-    if quick_sell > 0 and (quick_sell - max_buy) / quick_sell< MIN_PROFIT_RATIO:
-        max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - exp
-    return max(0, round(max_buy))
-
-
-def find_comparables(target_specs):
-    """Собрать похожие объявления: Lalafo + Mashina (+ Bazar hook) — вариант B."""
-    make = target_specs.get("make")
-    model = target_specs.get("model")
-    year = target_specs.get("year")
-    if not make or not year:
-        return []
-
-    query = make
-    if model:
-        query += " " + model.split()[0]
-
-    blob_model = f"{model or ''} {target_specs.get('fuel') or ''}".lower()
-    if make == "toyota" and ("camry" in (model or "") or "камри" in (model or "")):
-        if target_specs.get("fuel") == "hybrid" or "hybrid" in blob_model or "гибрид" in blob_model:
-            query = "toyota camry hybrid"
-
-    year_from = max(year - YEAR_TOLERANCE, 1985)
-    year_to = year + YEAR_TOLERANCE
-
-    items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
-    items += get_ads(page=2, q=query, per_page=40, year_from=year_from, year_to=year_to)
-
-    comps = []
-    for item in items:
-        if is_bad_listing(item.get("title") or "", item.get("description") or ""):
-            continue
-        sp = parse_ad_specs(item)
-        if not sp["price"]:
-            continue
-        if not specs_match(target_specs, sp):
-            continue
-        sp["source"] = "lalafo"
-        comps.append(sp)
-
-    # --- Mashina.kg prices into market pool ---
-    mashina_prices = fetch_mashina_market_prices(make, model, year)
-    for p in mashina_prices:
-        comps.append({
-            "make": make,
-            "model": model,
-            "year": year,
-            "price": p,
-            "source": "mashina",
-            "title": f"{make} {model or ''} mashina",
-            "description": "",
-            "mileage": None,
-            "engine": None,
-            "fuel": target_specs.get("fuel"),
-            "transmission": None,
-            "drive": None,
-            "body": None,
-            "ad": None,
-        })
-
-    # --- Bazar.kg hook (пока пусто) ---
-    for p in fetch_bazar_market_prices(make, model, year):
-        comps.append({
-            "make": make,
-            "model": model,
-            "year": year,
-            "price": p,
-            "source": "bazar",
-            "title": f"{make} {model or ''} bazar",
-            "description": "",
-            "mileage": None,
-            "engine": None,
-            "fuel": None,
-            "transmission": None,
-            "drive": None,
-            "body": None,
-            "ad": None,
-        })
-
-    return comps
-
-
-def analyze_and_notify(ad, seen):
-    ad_id = ad.get("id")
-    if ad_id in seen:
-        return
-
-    title = ad.get("title") or ""
-    description = ad.get("description") or ""
-
-    if is_bad_listing(title, description):
-        seen.add(ad_id)
-        return
-
-    target = parse_ad_specs(ad)
-    if not target["price"] or not target["make"] or not target["year"]:
-        seen.add(ad_id)
-        return
-    if target["year"] < MIN_YEAR:
-        seen.add(ad_id)
-        return
-
-    priority = is_priority_model(target, title, description)
-    min_comps = PRIORITY_MIN_COMPARABLES if priority else MIN_COMPARABLES
-    exp = PRIORITY_EXPENSES_USD if priority else EXPENSES_USD
-    req_profit = PRIORITY_REQUIRED_PROFIT_USD if priority else REQUIRED_PROFIT_USD
-
-    comps = find_comparables(target)
-    prices = [c["price"] for c in comps if c.get("price")]
-    src_lalafo = sum(1 for c in comps if c.get("source") == "lalafo")
-    src_mashina = sum(1 for c in comps if c.get("source") == "mashina")
-
-    quick_sell, cleaned = calc_real_quick_sell_price(prices, min_comps=min_comps)
-    if quick_sell is None:
-        print(f"  skip (мало данных): {title[:40]} | comps={len(prices)} | priority={priority}")
-        seen.add(ad_id); return
-
-    max_buy = calc_max_buy_price(quick_sell, expenses=exp, required_profit=req_profit)
-    if not max_buy:
-        seen.add(ad_id); return
-
-    seller = target["price"]
-
-    # ГЛАВНОЕ ПРАВИЛО
-    if seller > max_buy:
-        print(f"  skip (дорого): {title[:35]} | ask={seller}$ max_buy={max_buy}$ qs={quick_sell:.0f}$ | prio={priority}")
-        seen.add(ad_id); return
-
-    # REAL_BUY
-    expected_profit = quick_sell - seller - exp
-    margin_pct = (expected_profit / quick_sell * 100) if quick_sell else 0
-    urgent = text_has(f"{title} {description}", URGENT_KEYWORDS)
-
-    url = "https://lalafo.kg" + (ad.get("url") or "")
-    city = ad.get("city") or "Бишкек"
-    photo = None
-    if ad.get("images"):
-        photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
-
-    seller_kgs = round(seller * USD_KGS_RATE)
-    max_buy_kgs = round(max_buy * USD_KGS_RATE)
-    qs_kgs = round(quick_sell * USD_KGS_RATE)
-
-    urgent_mark = "⚡ <b>СРОЧНО</b>\n" if urgent else ""
-    prio_mark = "⭐ <b>ПРИОРИТЕТ: Camry Hybrid 70</b>\n" if priority else ""
-    text = (
-        f"{urgent_mark}{prio_mark}"
-        f"✅ <b>REAL BUY — МОЖНО ЗАБИРАТЬ</b>\n\n"
-        f"<b>{title}</b>\n"
-        f"📍 {city}\n\n"
-        f"💰 <b>Цена продавца:</b> {seller_kgs:,.0f} сом (~{seller}$)\n"
-        f"🛒 <b>MAX BUY (твой потолок):</b> {max_buy_kgs:,.0f} сом (~{max_buy}$)\n"
-        f"🏷 <b>Быстрая продажа (ориентир):</b> ~{qs_kgs:,.0f} сом (~{quick_sell:.0f}$)\n\n"
-        f"📉 Запас до потолка: <b>{max_buy - seller}$</b>\n"
-        f"💵 Ожид. прибыль после расходов: <b>~{expected_profit:.0f}$</b> ({margin_pct:.0f}%)\n"
-        f"🔧 Расходы: {exp}$ | торг {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {req_profit}$\n"
-        f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)}) | Lalafo:{src_lalafo} Mashina:{src_mashina}\n\n"
-        f"<a href='{url}'>Открыть объявление</a>"
-    )
-
-    send_telegram(text, photo)
-    tag = "PRIORITY_CAMRY70" if priority else "REAL_BUY"
-    print(f"[{datetime.now()}] {tag} | {title[:40]} | ask={seller}$ max={max_buy}$ profit~{expected_profit:.0f}$")
-    seen.add(ad_id)
-
-
-def main():
-    print("Бот REAL_BUY / MAX_BUY запущен...")
-    send_telegram(
-        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>"
-    )
-    seen = load_seen()
-    print(f"seen={len(seen)}")
-
-    while True:
+def fetch_mashina_feed(pages=2):
+    """Лента свежих объявлений Mashina.kg -> список в формате, близком к Lalafo."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9",
+    }
+    results = []
+    seen_slugs = set()
+    for page in range(1, pages + 1):
+        url = f"https://www.mashina.kg/search/all/?currency=2&sort_by=upped_at+desc&page={page}"
         try:
-            print(f"\n[{datetime.now()}] Проверка...")
-            ads = get_ads(page=1, per_page=40)
-            print(f"Новых с ленты: {len(ads)}")
-            if not ads:
-                time.sleep(CHECK_INTERVAL)
+            r = requests.get(url, headers=headers, timeout=25)
+            if r.status_code != 200:
+                print("Mashina feed status:", r.status_code)
                 continue
-
-            for ad in ads:
-                analyze_and_notify(ad, seen)
-
-            save_seen(seen)
-            print(f"Цикл OK, сон {CHECK_INTERVAL}с")
-            time.sleep(CHECK_INTERVAL)
-        except Exception as e:
-            print("Ошибка:", e)
-            time.sleep(20)
-
-
-if __name__ == "__main__":
-    main()
- 
+            html = r.text
+            links = list(dict.fromkeys(re.findall(r"/details/([a-z0-9\-]+)", html)))
+            raw_prices = re.findall(r"\$[\s\xa0\u00a0]?([\d\s\xa0\u00a0]+)", html)
+            parsed = []
+            for p in raw_prices:
+                digits = re.sub(r"\D", "", p)
+                if digits.isdigit():
+                    val = int(digits)
+                    if 1500 <= val <= 100000:
+                        parsed.append(val)
+            for i, slug in enumerate(links):
+                if slug in seen_slugs:
+                    continue
+                seen_slugs.add(slug)
+                price = parsed[i] if i < len(parsed) else None
+                if not price:
+                    continue
+                title = _mashina_slug_to_title(slug)
+                results.append({
+                    "
