@@ -601,8 +601,8 @@ def calc_max_buy_price(quick_sell, expenses=None, required_profit=None):
     after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
     max_buy = after_reserve - exp - profit
     if quick_sell > 0 and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO:
-    max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - exp
-return max(0, round(max_buy))
+        max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - exp
+    return max(0, round(max_buy))
 
 
 def find_comparables(target_specs):
