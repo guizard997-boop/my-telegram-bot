@@ -616,4 +616,87 @@ def analyze_and_notify(ad, seen):
 
     max_buy = calc_max_buy_price(quick_sell, expenses=exp, required_profit=req_profit)
     if not max_buy:
+        seen.add(ad_id); return
+
+    seller = target["price"]
+
+    # ГЛАВНОЕ ПРАВИЛО
+    if seller > max_buy:
+        print(f"  skip (дорого): {title[:35]} | ask={seller}$ max_buy={max_buy}$ qs={quick_sell:.0f}$ | prio={priority}")
+        seen.add(ad_id); return
+
+    # REAL_BUY
+    expected_profit = quick_sell - seller - exp
+    margin_pct = (expected_profit / quick_sell * 100) if quick_sell else 0
+    urgent = text_has(f"{title} {description}", URGENT_KEYWORDS)
+
+    url = "https://lalafo.kg" + (ad.get("url") or "")
+    city = ad.get("city") or "Бишкек"
+    photo = None
+    if ad.get("images"):
+        photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
+
+    seller_kgs = round(seller * USD_KGS_RATE)
+    max_buy_kgs = round(max_buy * USD_KGS_RATE)
+    qs_kgs = round(quick_sell * USD_KGS_RATE)
+
+    urgent_mark = "⚡ <b>СРОЧНО</b>\n" if urgent else ""
+    prio_mark = "⭐ <b>ПРИОРИТЕТ: Camry Hybrid 70</b>\n" if priority else ""
+    text = (
+        f"{urgent_mark}{prio_mark}"
+        f"✅ <b>REAL BUY — МОЖНО ЗАБИРАТЬ</b>\n\n"
+        f"<b>{title}</b>\n"
+        f"📍 {city}\n\n"
+        f"💰 <b>Цена продавца:</b> {seller_kgs:,.0f} сом (~{seller}$)\n"
+        f"🛒 <b>MAX BUY (твой потолок):</b> {max_buy_kgs:,.0f} сом (~{max_buy}$)\n"
+        f"🏷 <b>Быстрая продажа (ориентир):</b> ~{qs_kgs:,.0f} сом (~{quick_sell:.0f}$)\n\n"
+        f"📉 Запас до потолка: <b>{max_buy - seller}$</b>\n"
+        f"💵 Ожид. прибыль после расходов: <b>~{expected_profit:.0f}$</b> ({margin_pct:.0f}%)\n"
+        f"🔧 Расходы: {exp}$ | торг {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {req_profit}$\n"
+        f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)})\n\n"
+        f"<a href='{url}'>Открыть объявление</a>"
+    )
+
+    send_telegram(text, photo)
+    tag = "PRIORITY_CAMRY70" if priority else "REAL_BUY"
+    print(f"[{datetime.now()}] {tag} | {title[:40]} | ask={seller}$ max={max_buy}$ profit~{expected_profit:.0f}$")
+    seen.add(ad_id)
+
+
+def main():
+    print("Бот REAL_BUY / MAX_BUY запущен...")
+    send_telegram(
+        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>\n\n"
+        f"✅ Алгоритм скупки активен\n"
+        f"⭐ Приоритет: <b>Camry Hybrid 70</b> (2017–2024)\n"
+        f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLERANCE*100)}%\n"
+        f"• Быстрая продажа = {QUICK_SELL_PERCENTILE}-й перцентиль\n"
+        f"• MAX_BUY = продажа − расходы − торг − прибыль\n"
+        f"• Кидаю только если цена ≤ MAX_BUY"
+    )
+    seen = load_seen()
+    print(f"seen={len(seen)}")
+
+    while True:
+        try:
+            print(f"\n[{datetime.now()}] Проверка...")
+            ads = get_ads(page=1, per_page=40)
+            print(f"Новых с ленты: {len(ads)}")
+            if not ads:
+                time.sleep(CHECK_INTERVAL)
+                continue
+
+            for ad in ads:
+                analyze_and_notify(ad, seen)
+
+            save_seen(seen)
+            print(f"Цикл OK, сон {CHECK_INTERVAL}с")
+            time.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            print("Ошибка:", e)
+            time.sleep(20)
+
+
+if __name__ == "__main__":
+    main()
         
