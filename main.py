@@ -35,6 +35,13 @@ MIN_COMPARABLES = 5             # меньше — не считаем MAX_BUY �
 YEAR_TOLERANCE = 1
 MILEAGE_TOLERANCE = 0.30        # ±30%
 
+# ---- ПРИОРИТЕТНЫЕ МОДЕЛИ ----
+# Camry Hybrid 70 (XV70): примерно 2017–2024, ликвид в Бишкеке
+# Для них: мягче порог данных и чуть ниже требуемая прибыль
+PRIORITY_REQUIRED_PROFIT_USD = 450
+PRIORITY_MIN_COMPARABLES = 4
+PRIORITY_EXPENSES_USD = 200
+
 KNOWN_MAKES = {
     "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
     "mercedes-benz", "audi", "volkswagen", "vw", "ford", "chevrolet", "mazda",
@@ -166,6 +173,25 @@ def extract_year(title):
     return int(m.group(1)) if m else None
 
 
+CYRILLIC_MAKE_MAP = {
+    "тойота": "toyota",
+    "лексус": "lexus",
+    "хонда": "honda",
+    "ниссан": "nissan",
+    "хундай": "hyundai",
+    "хендай": "hyundai",
+    "киа": "kia",
+    "бмв": "bmw",
+    "мерседес": "mercedes",
+    "ауди": "audi",
+    "фольксваген": "volkswagen",
+    "мазда": "mazda",
+    "субару": "subaru",
+    "мицубиси": "mitsubishi",
+    "камри": "camry",  # иногда пишут без марки
+}
+
+
 def extract_make_model(title):
     if not title:
         return None, None
@@ -173,6 +199,11 @@ def extract_make_model(title):
     clean = re.sub(r"\s+", " ", clean).strip()
     clean = re.sub(r"\b(19|20)\d{2}\b", "", clean)
     clean = re.sub(r"\s*г\.?\s*", " ", clean).strip()
+    # нормализация кириллицы марок
+    for cyr, lat in CYRILLIC_MAKE_MAP.items():
+        clean = re.sub(rf"\b{cyr}\b", lat, clean)
+    # частые модели
+    clean = clean.replace("камри", "camry").replace("гибрид", "hybrid")
     words = clean.split()
     if not words:
         return None, None
@@ -188,6 +219,12 @@ def extract_make_model(title):
                 make = two
                 model_parts = words[i + 2 : i + 4]
                 break
+    # если в тексте camry, а make не найден — toyota
+    if not make and "camry" in clean:
+        make = "toyota"
+        model_parts = ["camry"]
+        if "hybrid" in clean:
+            model_parts.append("hybrid")
     if not make and words:
         make = words[0]
         model_parts = words[1:3]
@@ -236,13 +273,50 @@ def extract_fuel(text):
     t = (text or "").lower()
     if any(x in t for x in ["дизел", "diesel", "дизель"]):
         return "diesel"
-    if any(x in t for x in ["гибрид", "hybrid"]):
+    if any(x in t for x in ["гибрид", "hybrid", "hv", "hybrid"] ):
         return "hybrid"
     if any(x in t for x in ["электро", "electric", "ev "]):
         return "electric"
     if any(x in t for x in ["бензин", "petrol", "gas"]):
         return "petrol"
     return None
+
+
+def is_priority_model(specs, title="", description=""):
+    """
+    Приоритет: Toyota Camry Hybrid 70 (XV70).
+    Годы ~2017–2024, в названии camry/камри + hybrid/гибрид или просто camry 70.
+    """
+    make = (specs.get("make") or "").lower()
+    model = (specs.get("model") or "").lower()
+    year = specs.get("year")
+    blob = f"{title} {description} {model}".lower()
+
+    if make not in ("toyota",):
+        return False
+    if year and not (2017 <= year <= 2024):
+        return False
+
+    is_camry = ("camry" in blob) or ("камри" in blob) or ("camry" in model) or ("камри" in model)
+    is_hybrid = (
+        specs.get("fuel") == "hybrid"
+        or "hybrid" in blob
+        or "гибрид" in blob
+        or "гибрид" in model
+    )
+    is_70 = (
+        re.search(r"\b70\b", blob) is not None
+        or "xv70" in blob
+        or "xv-70" in blob
+        or (year is not None and 2017 <= year <= 2024)
+    )
+
+    # Camry Hybrid в годах 70-ки — приоритет даже без явной цифры 70
+    if is_camry and is_hybrid and year and 2017 <= year <= 2024:
+        return True
+    if is_camry and is_hybrid and is_70:
+        return True
+    return False
 
 
 def extract_transmission(text):
@@ -439,18 +513,19 @@ def percentile(data, percent):
     return s[f] * (c - idx) + s[c] * (idx - f)
 
 
-def calc_real_quick_sell_price(comparable_prices):
+def calc_real_quick_sell_price(comparable_prices, min_comps=None):
     """
     REAL_QUICK_SELL_PRICE — цена, по которой реально быстро уйдёт.
     Не среднее. Консервативный низ нормального очищенного рынка.
     """
+    need = MIN_COMPARABLES if min_comps is None else min_comps
     cleaned = remove_price_outliers(comparable_prices)
-    if len(cleaned) < MIN_COMPARABLES:
+    if len(cleaned) < need:
         return None, cleaned
     return percentile(cleaned, QUICK_SELL_PERCENTILE), cleaned
 
 
-def calc_max_buy_price(quick_sell):
+def calc_max_buy_price(quick_sell, expenses=None, required_profit=None):
     """
     MAX_BUY_PRICE =
       REAL_QUICK_SELL
@@ -460,11 +535,12 @@ def calc_max_buy_price(quick_sell):
     """
     if not quick_sell or quick_sell <= 0:
         return None
+    exp = EXPENSES_USD if expenses is None else expenses
+    profit = REQUIRED_PROFIT_USD if required_profit is None else required_profit
     after_reserve = quick_sell * (1 - NEGOTIATION_RESERVE)
-    max_buy = after_reserve - EXPENSES_USD - REQUIRED_PROFIT_USD
-    # доп. проверка доли прибыли
+    max_buy = after_reserve - exp - profit
     if quick_sell > 0 and (quick_sell - max_buy) / quick_sell < MIN_PROFIT_RATIO:
-        max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - EXPENSES_USD
+        max_buy = quick_sell * (1 - MIN_PROFIT_RATIO) - exp
     return max(0, round(max_buy))
 
 
@@ -480,11 +556,16 @@ def find_comparables(target_specs):
     if model:
         query += " " + model.split()[0]
 
+    # Для Camry Hybrid — уточняем запрос, чтобы аналоги были точнее
+    blob_model = f"{model or ''} {target_specs.get('fuel') or ''}".lower()
+    if make == "toyota" and ("camry" in (model or "") or "камри" in (model or "")):
+        if target_specs.get("fuel") == "hybrid" or "hybrid" in blob_model or "гибрид" in blob_model:
+            query = "toyota camry hybrid"
+
     year_from = max(year - YEAR_TOLERANCE, 1985)
     year_to = year + YEAR_TOLERANCE
 
     items = get_ads(q=query, per_page=60, year_from=year_from, year_to=year_to)
-    # вторая страница для плотности рынка
     items += get_ads(page=2, q=query, per_page=40, year_from=year_from, year_to=year_to)
 
     comps = []
@@ -520,96 +601,19 @@ def analyze_and_notify(ad, seen):
         seen.add(ad_id)
         return
 
+    priority = is_priority_model(target, title, description)
+    min_comps = PRIORITY_MIN_COMPARABLES if priority else MIN_COMPARABLES
+    exp = PRIORITY_EXPENSES_USD if priority else EXPENSES_USD
+    req_profit = PRIORITY_REQUIRED_PROFIT_USD if priority else REQUIRED_PROFIT_USD
+
     comps = find_comparables(target)
     prices = [c["price"] for c in comps if c.get("price")]
 
-    quick_sell, cleaned = calc_real_quick_sell_price(prices)
+    quick_sell, cleaned = calc_real_quick_sell_price(prices, min_comps=min_comps)
     if quick_sell is None:
-        print(f"  skip (мало данных): {title[:40]} | comps={len(prices)}")
+        print(f"  skip (мало данных): {title[:40]} | comps={len(prices)} | priority={priority}")
         seen.add(ad_id)
         return
 
-    max_buy = calc_max_buy_price(quick_sell)
-    if max_buy is None or max_buy <= 0:
-        seen.add(ad_id)
-        return
-
-    seller = target["price"]
-
-    # ГЛАВНОЕ ПРАВИЛО
-    if seller > max_buy:
-        print(f"  skip (дорого): {title[:35]} | ask={seller}$ max_buy={max_buy}$ qs={quick_sell:.0f}$")
-        seen.add(ad_id)
-        return
-
-    # REAL_BUY
-    expected_profit = quick_sell - seller - EXPENSES_USD
-    margin_pct = (expected_profit / quick_sell * 100) if quick_sell else 0
-    urgent = text_has(f"{title} {description}", URGENT_KEYWORDS)
-
-    url = "https://lalafo.kg" + (ad.get("url") or "")
-    city = ad.get("city") or "Бишкек"
-    photo = None
-    if ad.get("images"):
-        photo = ad["images"][0].get("original_url") or ad["images"][0].get("thumbnail_url")
-
-    seller_kgs = round(seller * USD_KGS_RATE)
-    max_buy_kgs = round(max_buy * USD_KGS_RATE)
-    qs_kgs = round(quick_sell * USD_KGS_RATE)
-
-    urgent_mark = "⚡ <b>СРОЧНО</b>\n" if urgent else ""
-    text = (
-        f"{urgent_mark}"
-        f"✅ <b>REAL BUY — МОЖНО ЗАБИРАТЬ</b>\n\n"
-        f"<b>{title}</b>\n"
-        f"📍 {city}\n\n"
-        f"💰 <b>Цена продавца:</b> {seller_kgs:,.0f} сом (~{seller}$)\n"
-        f"🛒 <b>MAX BUY (твой потолок):</b> {max_buy_kgs:,.0f} сом (~{max_buy}$)\n"
-        f"🏷 <b>Быстрая продажа (ориентир):</b> ~{qs_kgs:,.0f} сом (~{quick_sell:.0f}$)\n\n"
-        f"📉 Запас до потолка: <b>{max_buy - seller}$</b>\n"
-        f"💵 Ожид. прибыль после расходов: <b>~{expected_profit:.0f}$</b> ({margin_pct:.0f}%)\n"
-        f"🔧 Расходы заложены: {EXPENSES_USD}$ | резерв торга {int(NEGOTIATION_RESERVE*100)}% | цель прибыли {REQUIRED_PROFIT_USD}$\n"
-        f"🔍 Чистых аналогов: {len(cleaned)} (из {len(prices)})\n\n"
-        f"<a href='{url}'>Открыть объявление</a>"
-    )
-
-    send_telegram(text, photo)
-    print(f"[{datetime.now()}] REAL_BUY | {title[:40]} | ask={seller}$ max={max_buy}$ profit~{expected_profit:.0f}$")
-    seen.add(ad_id)
-
-
-def main():
-    print("Бот REAL_BUY / MAX_BUY запущен...")
-    send_telegram(
-        "🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>\n\n"
-        f"✅ Алгоритм скупки активен\n"
-        f"• Аналоги: марка+модель+год±{YEAR_TOLERANCE}, пробег±{int(MILEAGE_TOLERANCE*100)}%\n"
-        f"• Быстрая продажа = {QUICK_SELL_PERCENTILE}-й перцентиль\n"
-        f"• MAX_BUY = продажа − {EXPENSES_USD}$ − торг {int(NEGOTIATION_RESERVE*100)}% − прибыль {REQUIRED_PROFIT_USD}$\n"
-        f"• Кидаю только если цена ≤ MAX_BUY"
-    )
-    seen = load_seen()
-    print(f"seen={len(seen)}")
-
-    while True:
-        try:
-            print(f"\n[{datetime.now()}] Проверка...")
-            ads = get_ads(page=1, per_page=40)
-            print(f"Новых с ленты: {len(ads)}")
-            if not ads:
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-            for ad in ads:
-                analyze_and_notify(ad, seen)
-
-            save_seen(seen)
-            print(f"Цикл OK, сон {CHECK_INTERVAL}с")
-            time.sleep(CHECK_INTERVAL)
-        except Exception as e:
-            print("Ошибка:", e)
-            time.sleep(20)
-
-
-if __name__ == "__main__":
-    main()
+    max_buy = calc_max_buy_price(quick_sell, expenses=exp, required_profit=req_profit)
+    if max_buy is Non
