@@ -27,6 +27,26 @@ MIN_SIMILAR_LISTINGS = 5            # меньше — не считаем ры�
 MIN_YEAR = 2008
 ENABLE_MASHINA = True               # лента + аналоги с Mashina.kg
 MASHINA_FEED_PAGES = 2
+MASHINA_DETAIL_PRICE = True         # цена только со страницы объявления (точно)
+
+# Минимально адекватная цена (USD) — ниже = ошибка парсинга / мусор / скам
+# (make, model_token) -> floor
+PRICE_FLOORS = {
+    ("lexus", "gx"): 40000,
+    ("lexus", "lx"): 45000,
+    ("lexus", "rx"): 18000,
+    ("lexus", "es"): 12000,
+    ("lexus", "570"): 25000,
+    ("toyota", "prado"): 18000,
+    ("toyota", "land"): 22000,
+    ("toyota", "camry"): 7000,
+    ("toyota", "highlander"): 15000,
+    ("bmw", "x5"): 15000,
+    ("bmw", "x6"): 16000,
+    ("bmw", "x7"): 35000,
+    ("mercedes", "g"): 40000,
+    ("mercedes-benz", "g"): 40000,
+}
 
 # Этап 1 (быстрый отсев): грубая оценка без полного поиска
 STAGE1_MIN_DISCOUNT = 0.12          # если даже грубо скидка < 12% — отбрасываем
@@ -428,6 +448,7 @@ def remove_outliers(prices):
 
 
 
+
 def _mashina_slug_title(slug):
     if not slug:
         return "Авто Mashina"
@@ -437,8 +458,99 @@ def _mashina_slug_title(slug):
     return " ".join(p.capitalize() for p in parts) if parts else slug
 
 
+def _parse_usd_candidates(text):
+    vals = []
+    for p in re.findall(r"\$[\s\xa0\u00a0]*([\d\s\xa0\u00a0]{3,})", text or ""):
+        d = re.sub(r"\D", "", p)
+        if d.isdigit():
+            v = int(d)
+            if 2000 <= v <= 250000:
+                vals.append(v)
+    return vals
+
+
+def fetch_mashina_detail_meta(slug):
+    """Точная цена/год со страницы объявления Mashina (JSON-LD / schema)."""
+    url = f"https://www.mashina.kg/details/{slug}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+        if r.status_code != 200:
+            return None
+        t = r.text
+        price_usd = None
+        # 1) schema: price + priceCurrency USD
+        for m in re.finditer(
+            r'"price"\s*:\s*(\d+)\s*,\s*"priceCurrency"\s*:\s*"(USD|KGS|SOM|COM)"',
+            t,
+            re.I,
+        ):
+            val = int(m.group(1))
+            cur = m.group(2).upper()
+            if cur == "USD" and 2000 <= val <= 250000:
+                price_usd = val
+                break
+            if cur in ("KGS", "SOM", "COM") and val >= 100000:
+                price_usd = round(val / USD_KGS_RATE)
+                if 2000 <= price_usd <= 250000:
+                    break
+                price_usd = None
+        # 2) reverse order priceCurrency then price
+        if price_usd is None:
+            m = re.search(
+                r'"priceCurrency"\s*:\s*"(USD)"\s*,\s*"price"\s*:\s*(\d+)',
+                t,
+                re.I,
+            )
+            if m:
+                val = int(m.group(2))
+                if 2000 <= val <= 250000:
+                    price_usd = val
+        # 3) KGS only big number
+        if price_usd is None:
+            for m in re.finditer(r'"price"\s*:\s*(\d{6,8})', t):
+                val = int(m.group(1))
+                if val >= 500000:  # сомы
+                    price_usd = round(val / USD_KGS_RATE)
+                    if 2000 <= price_usd <= 250000:
+                        break
+                    price_usd = None
+        year = None
+        for pat in [r'(20\d{2})\s*г', r'"year"\s*:\s*(20\d{2})', r'\b(20[0-2]\d)\.']:
+            mm = re.search(pat, t)
+            if mm:
+                y = int(mm.group(1))
+                if 1990 <= y <= 2027:
+                    year = y
+                    break
+        return {"price_usd": price_usd, "year": year, "url": url}
+    except Exception as e:
+        print("Mashina detail err:", e)
+        return None
+
+
+def sane_min_price(make, model, year=None):
+    """Ниже этого — не доверяем цене (парсинг/ошибка/не тот лот)."""
+    make = (make or "").lower()
+    model = (model or "").lower()
+    first = model.split()[0] if model else ""
+    floor = 5000
+    for (m, tok), f in PRICE_FLOORS.items():
+        if make == m and (tok in model or first == tok or tok in first):
+            floor = f
+            break
+    if year and year >= 2022 and floor >= 15000:
+        floor = int(floor * 1.35)
+    elif year and year >= 2018 and floor >= 15000:
+        floor = int(floor * 1.15)
+    return floor
+
+
 def fetch_mashina_prices(make, model, pages=2):
-    """Цены похожих авто с Mashina.kg (USD) для расчёта рынка."""
+    """Рыночные цены Mashina: только через detail, без слепой склейки списка."""
     if not make or not ENABLE_MASHINA:
         return []
     q = make
@@ -451,37 +563,38 @@ def fetch_mashina_prices(make, model, pages=2):
     out = []
     make_l = make.lower()
     model_token = (model or "").split()[0].lower() if model else ""
+    slugs = []
     for page in range(1, pages + 1):
         url = f"https://www.mashina.kg/search/all/?q={requests.utils.quote(q)}&currency=2&page={page}"
         try:
             r = requests.get(url, headers=headers, timeout=20)
             if r.status_code != 200:
                 continue
-            html = r.text
-            links = list(dict.fromkeys(re.findall(r"/details/([a-z0-9\-]+)", html)))
-            raw = re.findall(r"\$[\s\xa0\u00a0]?([\d\s\xa0\u00a0]+)", html)
-            parsed = []
-            for p in raw:
-                d = re.sub(r"\D", "", p)
-                if d.isdigit():
-                    v = int(d)
-                    if 2000 <= v <= 100000:
-                        parsed.append(v)
-            for i, slug in enumerate(links):
+            for slug in re.findall(r"/details/([a-z0-9\-]+)", r.text):
                 slug_l = slug.lower()
                 if make_l not in slug_l:
                     continue
-                if model_token and model_token not in slug_l and model_token not in ("hybrid",):
+                if model_token and model_token not in ("hybrid",) and model_token not in slug_l:
                     continue
-                if i < len(parsed):
-                    out.append(parsed[i])
+                if slug not in slugs:
+                    slugs.append(slug)
         except Exception as e:
-            print("Mashina prices err:", e)
+            print("Mashina list err:", e)
+    # не больше 8 деталок за раз — скорость
+    for slug in slugs[:8]:
+        meta = fetch_mashina_detail_meta(slug)
+        if not meta or not meta.get("price_usd"):
+            continue
+        p = meta["price_usd"]
+        floor = sane_min_price(make, model, meta.get("year"))
+        if p < floor:
+            continue
+        out.append(p)
     return out
 
 
 def fetch_mashina_feed(pages=None):
-    """Свежие объявления Mashina.kg → формат Lalafo-compatible (с годом если удаётся)."""
+    """Лента Mashina: slug с поиска, цена/год — только со страницы объявления."""
     if not ENABLE_MASHINA:
         return []
     pages = pages or MASHINA_FEED_PAGES
@@ -497,41 +610,32 @@ def fetch_mashina_feed(pages=None):
             r = requests.get(url, headers=headers, timeout=25)
             if r.status_code != 200:
                 continue
-            html = r.text
-            links = list(dict.fromkeys(re.findall(r"/details/([a-z0-9\-]+)", html)))
-            raw = re.findall(r"\$[\s\xa0\u00a0]?([\d\s\xa0\u00a0]+)", html)
-            parsed = []
-            for p in raw:
-                d = re.sub(r"\D", "", p)
-                if d.isdigit():
-                    v = int(d)
-                    if 2000 <= v <= 100000:
-                        parsed.append(v)
-            # годы на странице (для подстановки по порядку, где возможно)
-            page_years = [int(y) for y in re.findall(r"\b(20[0-2]\d)\b", html) if 1990 <= int(y) <= 2027]
-
-            for i, slug in enumerate(links):
+            links = list(dict.fromkeys(re.findall(r"/details/([a-z0-9\-]+)", r.text)))[:12]
+            for slug in links:
                 if slug in seen_slugs:
                     continue
                 seen_slugs.add(slug)
-                if i >= len(parsed):
+                meta = fetch_mashina_detail_meta(slug) if MASHINA_DETAIL_PRICE else None
+                if not meta or not meta.get("price_usd"):
                     continue
+                price = meta["price_usd"]
                 title = _mashina_slug_title(slug)
-                year = extract_year(title)
-                if not year and i < len(page_years):
-                    # эвристика: год из потока страницы
-                    y = page_years[i]
-                    if 1995 <= y <= 2026:
-                        year = y
-                        title = f"{title} {year}"
+                year = meta.get("year")
+                if year:
+                    title = f"{title} {year}"
+                make, model = extract_make_model(title)
+                floor = sane_min_price(make, model, year)
+                if price < floor:
+                    print(f"  mashina drop bad price ${price} < floor ${floor}: {title[:40]}")
+                    continue
                 results.append({
                     "id": f"mashina_{slug}",
                     "title": title,
-                    "description": f"year:{year}" if year else "",
-                    "price": parsed[i],
+                    "description": "",
+                    "price": price,
                     "currency": "USD",
                     "symbol": "$",
-                    "url": f"https://www.mashina.kg/details/{slug}",
+                    "url": meta.get("url") or f"https://www.mashina.kg/details/{slug}",
                     "city": "Бишкек",
                     "images": None,
                     "source": "mashina",
@@ -673,6 +777,13 @@ def analyze(ad, seen):
         seen[ad_id] = listing
         return
     if car["year"] and car["year"] < MIN_YEAR:
+        seen[ad_id] = listing
+        return
+
+    # Нереальная цена для модели (ошибка Mashina/парсинга) — не скупка
+    floor = sane_min_price(car.get("make"), car.get("model"), car.get("year"))
+    if listing < floor:
+        print(f"  skip (цена ниже адекватной ${listing} < ${floor}): {title[:40]}")
         seen[ad_id] = listing
         return
 
