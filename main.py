@@ -600,4 +600,134 @@ def deal_score(discount, potential_profit, n_similar, liq_label, urgent=False):
 def score_fires(discount, potential_profit):
     if discount >= 0.28 and potential_profit >= 1500:
         return "🔥🔥🔥"
-    if discount >= 0.22 and poten
+    if discount >= 0.22 and potential_profit >= 1000:
+        return "🔥🔥"
+    return "🔥"
+
+
+def analyze(car, seen):
+    """car — уже normalize_mashina dict."""
+    ad_id = str(car.get("id") or "")
+    if not ad_id:
+        return
+
+    title = car.get("title") or ""
+    description = car.get("description") or ""
+    listing = car.get("price_usd")
+
+    if text_has_blocked(title, description):
+        seen[ad_id] = listing
+        return
+    if not listing or not car.get("make"):
+        seen[ad_id] = listing
+        return
+
+    year = car.get("year")
+    if year and year < MIN_YEAR:
+        seen[ad_id] = listing
+        return
+
+    if listing < MIN_PRICE_USD or listing > MAX_PRICE_USD:
+        print(f"  skip range ${listing}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    floor = sane_min_price(car.get("make"), car.get("model"), year)
+    if listing < floor:
+        print(f"  skip floor ${listing}<${floor}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    if ad_id in seen and seen[ad_id] is not None and seen[ad_id] == listing:
+        return
+
+    if stage1_rough_reject(car):
+        print(f"  stage1 drop: {title[:40]} | ${listing}")
+        seen[ad_id] = listing
+        return
+
+    similar = find_similar_prices(car)
+    if len(similar) < MIN_SIMILAR_LISTINGS:
+        print(f"  skip analogs {len(similar)}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    market_price = statistics.median(similar)
+    if not market_price:
+        seen[ad_id] = listing
+        return
+
+    if listing < market_price * 0.55:
+        print(f"  skip suspicious ${listing} vs ${market_price:.0f}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    margin_pct, liq_label = get_liquidity_margin_pct(car.get("make"), car.get("model"))
+    buy_price = round(market_price * (1 - margin_pct))
+    discount = (market_price - listing) / market_price
+    potential_profit = market_price - listing
+
+    if listing >= buy_price:
+        print(f"  skip >=BUY ${listing}>${buy_price}: {title[:35]}")
+        seen[ad_id] = listing
+        return
+    if discount < MIN_DISCOUNT:
+        print(f"  skip disc {discount*100:.1f}%: {title[:40]}")
+        seen[ad_id] = listing
+        return
+    if potential_profit < MIN_PROFIT:
+        print(f"  skip profit ${potential_profit:.0f}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    urgent = has_urgent_marker(title, description)
+    score = deal_score(discount, potential_profit, len(similar), liq_label, urgent)
+    if score < 70:
+        print(f"  skip score {score}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    fires = score_fires(discount, potential_profit)
+    url = car.get("url") or ""
+    urgent_mark = "⚡ " if urgent else ""
+    text = (
+        f"🚨 <b>СКУПКА</b> {fires}\n\n"
+        f"{urgent_mark}<b>{title}</b>\n"
+        f"Источник: Mashina.kg\n"
+        f"Цена: <b>${listing:,.0f}</b>\n"
+        f"Рынок: ~${market_price:,.0f}\n"
+        f"Цена скупки: ≤${buy_price:,.0f}\n"
+        f"Запас: ~${potential_profit:,.0f}\n"
+        f"Оценка: {fires} ({score}/100)\n"
+        f"<a href='{url}'>Ссылка</a>"
+    )
+    send_telegram(text)
+    print(f"[{datetime.now()}] SEND {fires} {score} | {title[:40]} | ${listing}")
+    seen[ad_id] = listing
+
+
+def main():
+    print("Бот СКУПКА Mashina-only запущен...")
+    send_telegram("🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>")
+    seen = load_seen()
+    print(f"seen={len(seen)} | only Mashina.kg | margin={REQUIRED_MARGIN_PCT*100:.0f}%")
+
+    while True:
+        try:
+            print(f"\n[{datetime.now()}] Mashina.kg...")
+            cars = fetch_mashina_feed()
+            for car in cars:
+                try:
+                    analyze(car, seen)
+                except Exception as e:
+                    print("analyze err:", e)
+            save_seen(seen)
+            print(f"Цикл OK, сон {CHECK_INTERVAL}с")
+            time.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            print("Ошибка:", e)
+            time.sleep(25)
+
+
+if __name__ == "__main__":
+    main()
