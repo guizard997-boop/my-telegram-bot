@@ -28,6 +28,8 @@ MIN_YEAR = 2008
 ENABLE_MASHINA = True               # лента + аналоги с Mashina.kg
 MASHINA_FEED_PAGES = 2
 MASHINA_DETAIL_PRICE = True         # цена только со страницы объявления (точно)
+SEND_ONLY_MASHINA = True            # в Telegram только Mashina (логика скупки та же)
+# Lalafo остаётся для расчёта рынка (аналоги), но объявления с Lalafo не шлём
 
 # Минимально адекватная цена (USD) — ниже = ошибка парсинга / мусор / скам
 # (make, model_token) -> floor
@@ -759,6 +761,10 @@ def analyze(ad, seen):
     if not ad_id:
         return
 
+    is_mashina_ad = ad_id.startswith("mashina_") or ad.get("source") == "mashina"
+    if SEND_ONLY_MASHINA and not is_mashina_ad:
+        return
+
     title = ad.get("title") or ""
     description = ad.get("description") or ""
     if is_blocked(title, description):
@@ -881,13 +887,16 @@ def main():
     while True:
         try:
             print(f"\n[{datetime.now()}] Проверка...")
-            ads = get_ads(page=1, per_page=40)
-            print(f"Lalafo: {len(ads)}")
-            for ad in ads:
-                try:
-                    analyze(ad, seen)
-                except Exception as e:
-                    print("analyze err:", e)
+            if not SEND_ONLY_MASHINA:
+                ads = get_ads(page=1, per_page=40)
+                print(f"Lalafo feed: {len(ads)}")
+                for ad in ads:
+                    try:
+                        analyze(ad, seen)
+                    except Exception as e:
+                        print("analyze err:", e)
+            else:
+                print("Lalafo feed: выключен (только Mashina в Telegram)")
 
             if ENABLE_MASHINA:
                 try:
