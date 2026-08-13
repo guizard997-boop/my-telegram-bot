@@ -14,15 +14,23 @@ CHECK_INTERVAL = 60
 SEEN_FILE = "seen_ads.json"
 USD_KGS_RATE = 87.5
 
-# --- Скупка (как на Lalafo-версии) ---
-REQUIRED_MARGIN_PCT = 0.23
-REQUIRED_MARGIN_PCT_HIGH_LIQ = 0.20
-REQUIRED_MARGIN_PCT_LOW_LIQ = 0.28
-MIN_PROFIT = 800
-MIN_DISCOUNT = 0.18
+# --- Три уровня цены ---
+# 1) ASK_MEDIAN     = медиана объявлений (часто "хотелки", завышено) — НЕ скупка
+# 2) REAL_SELL      = реальная продажная цена (низ рынка, по чему реально уходит)
+# 3) BUY_PRICE      = скупка = REAL_SELL * (1 - WHOLESALE_MARGIN)
+#
+# Пример: хотелки $14k, реал-продажа $12k → скупка $7.5–8k (не $11–12k!)
+
+REAL_SELL_PERCENTILE = 28       # низ очищенного рынка = реальная продажа
+WHOLESALE_MARGIN_PCT = 0.35     # скупка ≈ на 35% ниже реальной продажи ($12k → ~$7.8k)
+WHOLESALE_MARGIN_HIGH_LIQ = 0.32
+WHOLESALE_MARGIN_LOW_LIQ = 0.40
+
+MIN_PROFIT = 1200               # запас от REAL_SELL до listing минимум $
+MIN_DISCOUNT_VS_REAL_SELL = 0.30  # listing минимум на 30% ниже REAL_SELL
 MIN_SIMILAR_LISTINGS = 5
 MIN_YEAR = 2008
-STAGE1_MIN_DISCOUNT = 0.12
+STAGE1_MIN_DISCOUNT = 0.20      # быстрый отсев от грубой медианы
 
 MIN_PRICE_USD = 3500
 MAX_PRICE_USD = 80000
@@ -331,15 +339,16 @@ def sane_min_price(make, model, year=None):
 
 
 def get_liquidity_margin_pct(make, model):
+    """Маржа СКУПКИ от REAL_SELL (не от медианы хотелок)."""
     make = (make or "").lower()
     model = (model or "").lower()
     first = model.split()[0] if model else ""
     for hm, hmod in HIGH_LIQUIDITY:
         if make == hm and (hmod in model or first.startswith(hmod) or hmod in first):
-            return REQUIRED_MARGIN_PCT_HIGH_LIQ, "высокая"
+            return WHOLESALE_MARGIN_HIGH_LIQ, "высокая"
     if make in MEDIUM_LIQUIDITY_MAKES:
-        return REQUIRED_MARGIN_PCT, "средняя"
-    return REQUIRED_MARGIN_PCT_LOW_LIQ, "низкая"
+        return WHOLESALE_MARGIN_PCT, "средняя"
+    return WHOLESALE_MARGIN_LOW_LIQ, "низкая"
 
 
 def _slug_title(slug):
@@ -503,11 +512,49 @@ def similar_match(target, cand):
 
 
 def remove_outliers(prices):
+    """Убираем явные выбросы (в т.ч. завышенные «хотелки»)."""
     if len(prices) < 4:
         return prices
     med = statistics.median(prices)
-    cleaned = [p for p in prices if med * 0.55 <= p <= med * 1.35]
+    # жёстче сверху: дорогие объявления ломают «рынок»
+    cleaned = [p for p in prices if med * 0.50 <= p <= med * 1.22]
     return cleaned if len(cleaned) >= min(3, MIN_SIMILAR_LISTINGS) else prices
+
+
+def percentile(data, percent):
+    if not data:
+        return None
+    s = sorted(data)
+    n = len(s)
+    idx = (n - 1) * percent / 100.0
+    f = int(idx)
+    c = min(f + 1, n - 1)
+    if f == c:
+        return s[f]
+    return s[f] * (c - idx) + s[c] * (idx - f)
+
+
+def calc_price_levels(prices):
+    """
+    ask_median  — медиана объявлений (хотелки, для справки)
+    real_sell   — реальная продажная цена (низ рынка)
+    """
+    cleaned = remove_outliers(prices)
+    if len(cleaned) < MIN_SIMILAR_LISTINGS:
+        return None, None, cleaned
+    ask_median = statistics.median(cleaned)
+    real_sell = percentile(cleaned, REAL_SELL_PERCENTILE)
+    if real_sell is None:
+        return None, None, cleaned
+    # real_sell не выше медианы хотелок
+    if real_sell > ask_median:
+        real_sell = ask_median * 0.92
+    # дополнительно: медиана только нижней половины
+    half = sorted(cleaned)[: max(3, len(cleaned) // 2)]
+    if half:
+        low_med = statistics.median(half)
+        real_sell = min(real_sell, low_med)
+    return ask_median, round(real_sell), cleaned
 
 
 def find_similar_prices(car):
@@ -565,10 +612,12 @@ def stage1_rough_reject(car):
                 prices.append(p)
     if len(prices) < 3:
         return False
-    med = statistics.median(prices)
-    if med <= 0:
+    # грубо: низ рынка, не медиана хотелок
+    prices = sorted(prices)
+    low = statistics.median(prices[: max(2, len(prices) // 2)])
+    if low <= 0:
         return True
-    return (med - listing) / med < STAGE1_MIN_DISCOUNT
+    return (low - listing) / low < STAGE1_MIN_DISCOUNT
 
 
 def deal_score(discount, potential_profit, n_similar, liq_label, urgent=False):
@@ -652,27 +701,35 @@ def analyze(car, seen):
         seen[ad_id] = listing
         return
 
-    market_price = statistics.median(similar)
-    if not market_price:
+    ask_median, real_sell, cleaned = calc_price_levels(similar)
+    if not real_sell or not ask_median:
+        print(f"  skip no real_sell: {title[:40]}")
         seen[ad_id] = listing
         return
 
-    if listing < market_price * 0.55:
-        print(f"  skip suspicious ${listing} vs ${market_price:.0f}: {title[:40]}")
+    # listing близко к медиане хотелок = обычная продажа, НЕ скупка
+    if listing >= ask_median * 0.92:
+        print(f"  skip near ask-median ${listing} ~ ${ask_median}: {title[:40]}")
+        seen[ad_id] = listing
+        return
+
+    if listing < real_sell * 0.50:
+        print(f"  skip suspicious ${listing} vs real ${real_sell}: {title[:40]}")
         seen[ad_id] = listing
         return
 
     margin_pct, liq_label = get_liquidity_margin_pct(car.get("make"), car.get("model"))
-    buy_price = round(market_price * (1 - margin_pct))
-    discount = (market_price - listing) / market_price
-    potential_profit = market_price - listing
+    # СКУПКА от реальной продажи, не от медианы объявлений
+    buy_price = round(real_sell * (1 - margin_pct))
+    discount = (real_sell - listing) / real_sell if real_sell else 0
+    potential_profit = real_sell - listing
 
     if listing >= buy_price:
-        print(f"  skip >=BUY ${listing}>${buy_price}: {title[:35]}")
+        print(f"  skip >=BUY ${listing} >= ${buy_price} (real ${real_sell}): {title[:35]}")
         seen[ad_id] = listing
         return
-    if discount < MIN_DISCOUNT:
-        print(f"  skip disc {discount*100:.1f}%: {title[:40]}")
+    if discount < MIN_DISCOUNT_VS_REAL_SELL:
+        print(f"  skip disc vs real_sell {discount*100:.1f}%: {title[:40]}")
         seen[ad_id] = listing
         return
     if potential_profit < MIN_PROFIT:
@@ -681,8 +738,8 @@ def analyze(car, seen):
         return
 
     urgent = has_urgent_marker(title, description)
-    score = deal_score(discount, potential_profit, len(similar), liq_label, urgent)
-    if score < 70:
+    score = deal_score(discount, potential_profit, len(cleaned), liq_label, urgent)
+    if score < 72:
         print(f"  skip score {score}: {title[:40]}")
         seen[ad_id] = listing
         return
@@ -695,9 +752,10 @@ def analyze(car, seen):
         f"{urgent_mark}<b>{title}</b>\n"
         f"Источник: Mashina.kg\n"
         f"Цена: <b>${listing:,.0f}</b>\n"
-        f"Рынок: ~${market_price:,.0f}\n"
+        f"Хотелки (медиана): ~${ask_median:,.0f}\n"
+        f"Реал. продажа: ~${real_sell:,.0f}\n"
         f"Цена скупки: ≤${buy_price:,.0f}\n"
-        f"Запас: ~${potential_profit:,.0f}\n"
+        f"Запас до реал. продажи: ~${potential_profit:,.0f}\n"
         f"Оценка: {fires} ({score}/100)\n"
         f"<a href='{url}'>Ссылка</a>"
     )
@@ -710,7 +768,7 @@ def main():
     print("Бот СКУПКА Mashina-only запущен...")
     send_telegram("🎩 <b>Господин Дияр, ваш бот полностью готов служить вам.</b>")
     seen = load_seen()
-    print(f"seen={len(seen)} | only Mashina.kg | margin={REQUIRED_MARGIN_PCT*100:.0f}%")
+    print(f"seen={len(seen)} | Mashina | wholesale={WHOLESALE_MARGIN_PCT*100:.0f}% of REAL_SELL")
 
     while True:
         try:
