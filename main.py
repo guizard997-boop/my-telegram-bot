@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+"""
+Бот Lalafo — кидает ниже рынка и скупку + рамки цен
+"""
+
 import os
 import time
 import json
@@ -6,121 +11,80 @@ import statistics
 import requests
 from datetime import datetime
 
-# ================== CONFIG ==================
 BOT_TOKEN = "8677610768:AAHDOe1Xzm-sS_3GnRZvEM38GlQmx7uLJ7c"
 CHAT_ID = "8569472160"
 
-CHECK_INTERVAL = 45
+CHECK_INTERVAL = 35
 CITY_ID = 103184
-# Реальные категории легковых на Lalafo.kg (1501 больше не отдаёт авто)
 CAR_CATEGORY_IDS = [1608, 1557, 1570, 1581, 1572, 1559, 1576]
 FEED_QUERIES = [
-    "toyota", "toyota camry", "lexus", "honda", "hyundai", "kia",
-    "bmw", "mercedes", "nissan", "mazda", "subaru", "volkswagen",
+    "toyota", "camry", "lexus", "honda", "hyundai", "kia",
+    "bmw", "mercedes", "nissan", "mazda", "subaru", "rav4", "prado",
 ]
 SEEN_FILE = "seen_ads_lalafo.json"
 USD_KGS_RATE = 87.5
 
-# REAL_SELL → BUY (скупка ниже реальной продажи, не ниже «хотелок»)
-REAL_SELL_PERCENTILE = 30
-WHOLESALE_MARGIN_PCT = 0.30
-WHOLESALE_MARGIN_HIGH_LIQ = 0.27
-WHOLESALE_MARGIN_LOW_LIQ = 0.35
+REAL_SELL_PERCENTILE = 35
+WHOLESALE_MARGIN_PCT = 0.15
+WHOLESALE_MARGIN_HIGH_LIQ = 0.12
+WHOLESALE_MARGIN_LOW_LIQ = 0.18
 
-MIN_PROFIT = 1000
-MIN_DISCOUNT_VS_REAL_SELL = 0.22
-MIN_SIMILAR_LISTINGS = 4
-MIN_YEAR = 2008
-STAGE1_MIN_DISCOUNT = 0.12
-MIN_SCORE = 60
-
-MIN_PRICE_USD = 3500
-MAX_PRICE_USD = 80000
-HEARTBEAT_EVERY = 40  # циклов (~30 мин) — чтобы было видно, что бот жив
-
-URGENT_BOOST_KEYWORDS = [
-    "срочно", "торг", "уступлю", "сегодня", "торг реальному",
-    "нужны деньги", "быстро продам", "цена снижена",
-]
-
-KNOWN_MAKES = {
-    "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
-    "mercedes-benz", "audi", "volkswagen", "vw", "ford", "chevrolet", "mazda",
-    "subaru", "mitsubishi", "suzuki", "opel", "skoda", "renault", "peugeot",
-    "citroen", "volvo", "land rover", "range rover", "jeep", "infiniti",
-    "acura", "genesis", "ssangyong", "daewoo", "geely", "chery", "haval",
-    "byd", "porsche", "mini", "lada", "ваз",
-}
-
-HIGH_LIQUIDITY = {
-    ("toyota", "camry"), ("toyota", "corolla"), ("toyota", "rav4"),
-    ("toyota", "prado"), ("toyota", "highlander"), ("toyota", "land"),
-    ("lexus", "rx"), ("lexus", "gx"), ("lexus", "es"), ("lexus", "lx"),
-    ("honda", "cr"), ("honda", "accord"), ("honda", "fit"),
-    ("hyundai", "tucson"), ("hyundai", "sonata"), ("hyundai", "elantra"),
-    ("kia", "sportage"), ("kia", "k5"), ("kia", "sorento"),
-    ("bmw", "x5"), ("bmw", "x3"), ("mercedes", "e"), ("mercedes-benz", "e"),
-}
-
-MEDIUM_LIQUIDITY_MAKES = {
-    "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw",
-    "mercedes", "mercedes-benz", "audi", "subaru", "mazda", "volkswagen", "vw",
-}
-
-STOP_WORDS = [
-    "чехол", "стекло на", "стекло для", "запчаст", "аксессуар",
-    "коробка от", "документы на", "ремонт", "услуг", "работаю",
-    "разбор", "в разборе", "контрактн", "б/у запчаст",
-    "диск", "диски", "бампер", "крыло", "капот", "зеркало",
-    "радиатор", "генератор", "стартер", "шины", "резина",
-    "магнитола", "фара", "фары", "коврик", "оплетка", "фильтр",
-    "аккумулятор", "масло мотор", "аренда", "портер такси",
-    "вывоз мусор", "грузчик", "погрузчик",
-]
-
-CRITICAL_DAMAGE = [
-    "битый", "битая", "битое", "после дтп", "после аварии",
-    "аварийный", "не на ходу", "не находу", "на запчасти",
-    "распил", "каркас", "конструктор",
-]
-
-INSTALLMENT_KEYWORDS = [
-    "рассрочк", "первоначальн", "в кредит", "кредит",
-    "ежемесячн", "лизинг", "оплата частями", "первый взнос",
-]
-
-ORDER_KEYWORDS = [
-    "под заказ", "подзаказ", "на заказ", "заказ из", "из китая",
-    "из кореи", "из японии", "из оаэ", "из дубая", "из сша",
-    "в пути", "едет", "ожидается", "пригон", "с аукциона",
-]
-
-NOT_CLEARED = [
-    "не растаможен", "не растаможена", "без растаможки",
-    "без растамож", "не на учете", "временный учет", "транзит", "без птс",
-]
+# Ниже медианы рынка на 8%+ и запас от $400 → кидать
+MIN_VS_MEDIAN = 0.08
+MIN_GAP_MEDIAN = 400
+# Ниже реал.продажи на 8%+ → скупка
+MIN_VS_REAL = 0.08
+MIN_GAP_REAL = 500
+MIN_SIMILAR = 3
+MIN_YEAR = 2005
+MIN_SCORE = 35
+MIN_PRICE_USD = 3000
+MAX_PRICE_USD = 90000
+HEARTBEAT_EVERY = 25
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json",
     "device": "pc",
     "language": "ru_RU",
     "country-id": "12",
 }
 
-CYRILLIC_MAKE_MAP = {
+KNOWN_MAKES = {
+    "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw", "mercedes",
+    "mercedes-benz", "audi", "volkswagen", "vw", "ford", "chevrolet", "mazda",
+    "subaru", "mitsubishi", "suzuki", "skoda", "renault", "volvo", "infiniti",
+    "acura", "genesis", "geely", "chery", "haval", "lada", "ваз",
+}
+HIGH_LIQUIDITY = {
+    ("toyota", "camry"), ("toyota", "corolla"), ("toyota", "rav4"),
+    ("toyota", "prado"), ("toyota", "highlander"), ("toyota", "land"),
+    ("lexus", "rx"), ("lexus", "gx"), ("lexus", "es"),
+    ("honda", "cr"), ("honda", "accord"), ("hyundai", "tucson"), ("hyundai", "sonata"),
+    ("kia", "sportage"), ("kia", "k5"), ("bmw", "x5"), ("bmw", "x3"), ("mercedes", "e"),
+}
+MEDIUM_LIQ = {
+    "toyota", "lexus", "honda", "nissan", "hyundai", "kia", "bmw",
+    "mercedes", "mercedes-benz", "audi", "subaru", "mazda", "volkswagen", "vw",
+}
+STOP = [
+    "чехол", "стекло на", "запчаст", "аксессуар", "ремонт", "услуг", "разбор",
+    "бампер", "крыло", "капот", "шины", "резина", "фара", "аренда", "портер",
+    "вывоз мусор", "погрузчик",
+]
+BAD = ["битый", "битая", "после дтп", "не на ходу", "на запчасти", "распил", "каркас"]
+CREDIT = ["рассрочк", "в кредит", "лизинг", "первый взнос"]
+ORDER = ["под заказ", "из китая", "из кореи", "в пути", "пригон", "аукцион"]
+NOT_CLEAR = ["не растаможен", "без растамож", "временный учет", "транзит", "без птс"]
+CYR = {
     "тойота": "toyota", "лексус": "lexus", "хонда": "honda", "ниссан": "nissan",
     "хундай": "hyundai", "хендай": "hyundai", "киа": "kia", "бмв": "bmw",
-    "мерседес": "mercedes", "ауди": "audi", "фольксваген": "volkswagen",
-    "мазда": "mazda", "субару": "subaru", "мицубиси": "mitsubishi", "камри": "camry",
+    "мерседес": "mercedes", "камри": "camry",
 }
-
-PRICE_FLOORS = {
-    ("lexus", "gx"): 40000, ("lexus", "lx"): 45000, ("lexus", "rx"): 18000,
-    ("lexus", "es"): 12000, ("toyota", "prado"): 18000, ("toyota", "land"): 22000,
-    ("toyota", "camry"): 7000, ("toyota", "highlander"): 15000,
-    ("bmw", "x5"): 15000, ("bmw", "x7"): 35000,
-    ("mercedes", "g"): 40000, ("mercedes-benz", "g"): 40000,
+FLOORS = {
+    ("lexus", "gx"): 35000, ("lexus", "lx"): 40000, ("lexus", "rx"): 15000,
+    ("toyota", "prado"): 14000, ("toyota", "land"): 18000, ("toyota", "camry"): 5000,
+    ("toyota", "highlander"): 12000, ("bmw", "x5"): 12000,
 }
 
 
@@ -129,76 +93,53 @@ def load_seen():
         return {}
     try:
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return {str(x): None for x in data}
-        if isinstance(data, dict):
-            return data
+            d = json.load(f)
+        return {str(x): None for x in d} if isinstance(d, list) else (d if isinstance(d, dict) else {})
     except Exception:
-        pass
-    return {}
+        return {}
 
 
 def save_seen(seen):
-    items = list(seen.items())[-5000:]
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(dict(items), f)
+        json.dump(dict(list(seen.items())[-5000:]), f)
 
 
 def send_telegram(text, photo_url=None):
     try:
         if photo_url and len(text) <= 1000:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            data = {
-                "chat_id": CHAT_ID,
-                "photo": photo_url,
-                "caption": text[:1024],
-                "parse_mode": "HTML",
-            }
+            r = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={"chat_id": CHAT_ID, "photo": photo_url, "caption": text[:1024], "parse_mode": "HTML"},
+                timeout=15,
+            )
         else:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            data = {
-                "chat_id": CHAT_ID,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            }
-        r = requests.post(url, data=data, timeout=15)
-        if r.status_code != 200:
-            print("Telegram error:", r.text[:250])
-            return False
-        print("Telegram OK")
-        return True
+            r = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
+                timeout=15,
+            )
+        ok = r.status_code == 200 and (r.json() or {}).get("ok")
+        print("TG", "OK" if ok else r.text[:150])
+        return ok
     except Exception as e:
-        print("Telegram:", e)
+        print("TG", e)
         return False
 
 
-def text_has(text, words):
+def has(text, words):
     t = (text or "").lower()
     return any(w in t for w in words)
 
 
-def is_blocked(title, description=""):
-    blob = f"{title} {description}"
-    return (
-        text_has(blob, STOP_WORDS)
-        or text_has(blob, CRITICAL_DAMAGE)
-        or text_has(blob, INSTALLMENT_KEYWORDS)
-        or text_has(blob, ORDER_KEYWORDS)
-        or text_has(blob, NOT_CLEARED)
-    )
+def blocked(title, desc=""):
+    b = f"{title} {desc}"
+    return has(b, STOP) or has(b, BAD) or has(b, CREDIT) or has(b, ORDER) or has(b, NOT_CLEAR)
 
 
-def extract_year(title):
+def year_of(title):
     if not title:
         return None
-    m = re.search(r"(20\d{2}|19\d{2})\s*г", title, re.I)
-    if m:
-        y = int(m.group(1))
-        if 1990 <= y <= 2027:
-            return y
-    m = re.search(r"\b(20\d{2}|19\d{2})\b", title)
+    m = re.search(r"(20\d{2}|19\d{2})\s*г", title, re.I) or re.search(r"\b(20\d{2}|19\d{2})\b", title)
     if m:
         y = int(m.group(1))
         if 1990 <= y <= 2027:
@@ -206,407 +147,270 @@ def extract_year(title):
     return None
 
 
-def extract_make_model(title):
+def make_model(title):
     if not title:
         return None, None
     clean = re.sub(r"[^\w\s\-]", " ", title.lower())
-    clean = re.sub(r"\s+", " ", clean).strip()
+    clean = re.sub(r"\s+", " ", clean)
     clean = re.sub(r"\b(19|20)\d{2}\b", "", clean)
     clean = re.sub(r"\s*г\.?\s*", " ", clean).strip()
-    for cyr, lat in CYRILLIC_MAKE_MAP.items():
-        clean = re.sub(rf"\b{cyr}\b", lat, clean)
-    clean = clean.replace("камри", "camry").replace("гибрид", "hybrid")
+    for a, b in CYR.items():
+        clean = re.sub(rf"\b{a}\b", b, clean)
+    clean = clean.replace("камри", "camry")
     words = clean.split()
     if not words:
         return None, None
-    make, model_parts = None, []
-    for i, word in enumerate(words):
-        if word in KNOWN_MAKES:
-            make = word
-            model_parts = words[i + 1 : i + 3]
+    make, parts = None, []
+    for i, w in enumerate(words):
+        if w in KNOWN_MAKES:
+            make, parts = w, words[i + 1 : i + 3]
             break
-        if i + 1 < len(words):
-            two = f"{word} {words[i + 1]}"
-            if two in KNOWN_MAKES:
-                make = two
-                model_parts = words[i + 2 : i + 4]
-                break
     if not make and "camry" in clean:
-        make = "toyota"
-        model_parts = ["camry"] + (["hybrid"] if "hybrid" in clean else [])
-    if not make and words:
-        make = words[0]
-        model_parts = words[1:3]
-    model = " ".join(model_parts).strip() if model_parts else None
-    return make, model
+        make, parts = "toyota", ["camry"]
+    if not make:
+        make, parts = words[0], words[1:3]
+    return make, (" ".join(parts).strip() or None)
 
 
-def extract_mileage(text):
-    if not text:
-        return None
-    for p in [
-        r"пробег[:\s]*(\d{1,3}[\s]?000|\d{4,7})\s*(км|km)?",
-        r"(\d{1,3}[\s]?\d{3})\s*(км|km)",
-        r"(\d+)\s*тыс\.?\s*(км|km)?",
-    ]:
-        m = re.search(p, (text or "").lower())
-        if m:
-            raw = re.sub(r"\s+", "", m.group(1))
-            try:
-                val = int(raw)
-                if "тыс" in (m.group(0) or ""):
-                    val *= 1000
-                if 1000 <= val <= 900000:
-                    return val
-            except ValueError:
-                pass
-    return None
-
-
-def extract_engine(text):
-    m = re.search(r"\b([1-6][.,]\d)\s*(л|l)?\b", (text or "").lower())
-    return m.group(1).replace(",", ".") if m else None
-
-
-def extract_fuel(text):
-    t = (text or "").lower()
-    if any(x in t for x in ["дизел", "diesel", "дизель"]):
+def fuel_of(t):
+    t = (t or "").lower()
+    if any(x in t for x in ["дизел", "diesel"]):
         return "diesel"
     if any(x in t for x in ["гибрид", "hybrid"]):
         return "hybrid"
-    if any(x in t for x in ["электро", "electric"]):
-        return "electric"
-    if any(x in t for x in ["бензин", "petrol"]):
+    if "бензин" in t:
         return "petrol"
     return None
 
 
-def extract_transmission(text):
-    t = (text or "").lower()
-    if any(x in t for x in ["акпп", "автомат", "automatic", "cvt", "вариатор", "типтроник"]):
-        return "auto"
-    if any(x in t for x in ["мкпп", "механика", "manual"]):
-        return "manual"
-    return None
-
-
-def extract_drive(text):
-    t = (text or "").lower()
-    if any(x in t for x in ["полный", "4wd", "awd", "4x4"]):
-        return "awd"
-    if any(x in t for x in ["передний", "fwd"]):
-        return "fwd"
-    if any(x in t for x in ["задний", "rwd"]):
-        return "rwd"
-    return None
-
-
-def extract_body(text):
-    t = (text or "").lower()
-    for k, v in [
-        ("седан", "sedan"), ("хетч", "hatch"), ("хэтч", "hatch"),
-        ("универсал", "wagon"), ("внедорожник", "suv"), ("кроссовер", "suv"),
-        ("минивэн", "mpv"), ("пикап", "pickup"), ("купе", "coupe"),
-    ]:
-        if k in t:
-            return v
-    return None
-
-
-def price_to_usd(ad):
-    price = ad.get("price")
-    if price is None:
+def price_usd(ad):
+    p = ad.get("price")
+    if p is None:
         return None
     try:
-        price = float(price)
-    except (ValueError, TypeError):
+        p = float(p)
+    except Exception:
         return None
-    currency = (ad.get("currency") or "").upper().strip()
-    symbol = (ad.get("symbol") or "").upper().strip()
-    if currency in ("USD", "$") or symbol in ("$", "USD"):
-        usd = price
-    elif currency in ("KGS", "COM", "СОМ", "SOM") or symbol in ("COM", "С", "СОМ", "SOM"):
-        usd = price / USD_KGS_RATE
+    cur = (ad.get("currency") or "").upper()
+    sym = (ad.get("symbol") or "").upper()
+    if cur in ("USD", "$") or sym in ("$", "USD"):
+        u = p
+    elif cur in ("KGS", "COM", "СОМ", "SOM") or sym in ("COM", "С"):
+        u = p / USD_KGS_RATE
     else:
-        usd = price / USD_KGS_RATE if price >= 80000 else price
-    if usd < 1500 or usd > 120000:
+        u = p / USD_KGS_RATE if p >= 80000 else p
+    if u < 1500 or u > 120000:
         return None
-    return round(usd)
+    return round(u)
 
 
-def normalize(ad):
+def norm(ad):
     title = ad.get("title") or ""
     desc = ad.get("description") or ""
-    blob = f"{title} {desc}"
-    make, model = extract_make_model(title)
+    make, model = make_model(title)
+    city = ad.get("city")
+    if isinstance(city, dict):
+        city = city.get("name")
     return {
         "id": ad.get("id"),
         "title": title,
         "description": desc,
         "make": make,
         "model": model,
-        "year": extract_year(title),
-        "engine": extract_engine(blob),
-        "fuel": extract_fuel(blob),
-        "transmission": extract_transmission(blob),
-        "drive": extract_drive(blob),
-        "body": extract_body(blob),
-        "mileage": extract_mileage(blob),
-        "price_usd": price_to_usd(ad),
+        "year": year_of(title),
+        "fuel": fuel_of(f"{title} {desc}"),
+        "price_usd": price_usd(ad),
         "url": ad.get("url") or "",
-        "city": (ad.get("city") or {}).get("name") if isinstance(ad.get("city"), dict) else (ad.get("city") or "Бишкек"),
+        "city": city or "Бишкек",
         "images": ad.get("images"),
-        "category_id": ad.get("category_id"),
-        "raw": ad,
     }
 
 
-def looks_like_car(title):
-    t = title or ""
-    if not extract_year(t):
-        return False
-    make, _ = extract_make_model(t)
-    if not make:
-        return False
-    # типичный формат Lalafo: "Toyota Camry: 2019 г., 2.5 л,..."
-    if ":" in t and re.search(r"20\d{2}|19\d{2}", t):
-        return True
-    if make in KNOWN_MAKES:
-        return True
-    return False
-
-
-def has_urgent_marker(title, description=""):
-    return text_has(f"{title} {description}", URGENT_BOOST_KEYWORDS)
-
-
-def sane_min_price(make, model, year=None):
+def floor_price(make, model, year=None):
     make = (make or "").lower()
     model = (model or "").lower()
     first = model.split()[0] if model else ""
-    floor = MIN_PRICE_USD
-    for (m, tok), f in PRICE_FLOORS.items():
-        if make == m and (tok in model or first == tok or tok in first):
-            floor = max(floor, f)
-            break
-    if year and year >= 2022 and floor >= 15000:
-        floor = int(floor * 1.35)
-    elif year and year >= 2018 and floor >= 15000:
-        floor = int(floor * 1.15)
-    return floor
+    fl = MIN_PRICE_USD
+    for (m, tok), f in FLOORS.items():
+        if make == m and (tok in model or first == tok):
+            fl = max(fl, f)
+    return fl
 
 
-def get_liquidity_margin_pct(make, model):
+def margin_of(make, model):
     make = (make or "").lower()
     model = (model or "").lower()
     first = model.split()[0] if model else ""
     for hm, hmod in HIGH_LIQUIDITY:
-        if make == hm and (hmod in model or first.startswith(hmod) or hmod in first):
+        if make == hm and (hmod in model or first.startswith(hmod)):
             return WHOLESALE_MARGIN_HIGH_LIQ, "высокая"
-    if make in MEDIUM_LIQUIDITY_MAKES:
+    if make in MEDIUM_LIQ:
         return WHOLESALE_MARGIN_PCT, "средняя"
     return WHOLESALE_MARGIN_LOW_LIQ, "низкая"
 
 
 def get_ads(page=1, q=None, per_page=40, category_id=None):
-    params = {
-        "per-page": per_page,
-        "page": page,
-        "expand": "url",
-        "sort_by": "newest",
-        "city_id": CITY_ID,
-    }
+    params = {"per-page": per_page, "page": page, "expand": "url", "sort_by": "newest", "city_id": CITY_ID}
     if category_id:
         params["category_id"] = category_id
     if q:
         params["q"] = q
     try:
-        r = requests.get(
-            "https://api.lalafo.com/v3/ads/search",
-            params=params,
-            headers=HEADERS,
-            timeout=20,
-        )
+        r = requests.get("https://api.lalafo.com/v3/ads/search", params=params, headers=HEADERS, timeout=20)
         if r.status_code == 200:
             return r.json().get("items") or []
-        print(f"Lalafo HTTP {r.status_code}: {r.text[:120]}")
     except Exception as e:
-        print("Lalafo error:", e)
+        print("Lalafo", e)
     return []
 
 
 def fetch_feed():
-    """Лента только реальных авто: категории + запросы по маркам."""
     raw = []
     for cid in CAR_CATEGORY_IDS:
-        raw += get_ads(page=1, per_page=30, category_id=cid)
+        raw += get_ads(1, per_page=40, category_id=cid)
     for q in FEED_QUERIES:
-        raw += get_ads(page=1, per_page=20, q=q)
-
-    seen_ids = set()
-    cars = []
+        raw += get_ads(1, q=q, per_page=30)
+    seen, cars = set(), []
     for ad in raw:
-        aid = ad.get("id")
-        if not aid or aid in seen_ids:
+        i = ad.get("id")
+        if not i or i in seen:
             continue
-        seen_ids.add(aid)
-        title = ad.get("title") or ""
-        desc = ad.get("description") or ""
-        if is_blocked(title, desc):
+        seen.add(i)
+        t, d = ad.get("title") or "", ad.get("description") or ""
+        if blocked(t, d):
             continue
-        if not looks_like_car(title):
-            continue
-        if not price_to_usd(ad):
+        if not year_of(t) or not make_model(t)[0] or not price_usd(ad):
             continue
         cars.append(ad)
-    print(f"Лента авто: {len(cars)} из {len(raw)} сырых")
+    print(f"Лента {len(cars)} / {len(raw)}")
     return cars
 
 
-def similar_match(target, cand):
-    if not target.get("make") or not cand.get("make"):
+def similar_ok(a, b):
+    if not a.get("make") or a["make"] != b.get("make"):
         return False
-    if target["make"] != cand["make"]:
+    am = (a.get("model") or "").split()
+    bm = (b.get("model") or "").split()
+    if am and bm and am[0] != bm[0]:
         return False
-    t_m = (target.get("model") or "").split()
-    c_m = (cand.get("model") or "").split()
-    if t_m and c_m and t_m[0] != c_m[0]:
+    ay, by = a.get("year"), b.get("year")
+    if ay and by and abs(ay - by) > 2:
         return False
-    ty, cy = target.get("year"), cand.get("year")
-    if ty and cy and abs(ty - cy) > 1:
-        return False
-    for key in ("fuel", "body"):
-        tv, cv = target.get(key), cand.get(key)
-        if tv and cv and tv != cv:
-            return False
     return True
 
 
-def remove_outliers(prices):
+def outliers(prices):
     if len(prices) < 4:
         return prices
     med = statistics.median(prices)
-    cleaned = [p for p in prices if med * 0.50 <= p <= med * 1.25]
-    return cleaned if len(cleaned) >= min(3, MIN_SIMILAR_LISTINGS) else prices
+    c = [p for p in prices if med * 0.45 <= p <= med * 1.40]
+    return c if len(c) >= 2 else prices
 
 
-def percentile(data, percent):
-    if not data:
-        return None
+def percentile(data, p):
     s = sorted(data)
     n = len(s)
-    idx = (n - 1) * percent / 100.0
+    if not n:
+        return None
+    idx = (n - 1) * p / 100.0
     f = int(idx)
     c = min(f + 1, n - 1)
-    if f == c:
-        return s[f]
-    return s[f] * (c - idx) + s[c] * (idx - f)
+    return s[f] if f == c else s[f] * (c - idx) + s[c] * (idx - f)
 
 
-def calc_price_levels(prices):
-    cleaned = remove_outliers(prices)
-    if len(cleaned) < MIN_SIMILAR_LISTINGS:
-        return None, None, cleaned
-    ask_median = statistics.median(cleaned)
-    real_sell = percentile(cleaned, REAL_SELL_PERCENTILE)
-    if real_sell is None:
-        return None, None, cleaned
-    if real_sell > ask_median:
-        real_sell = ask_median * 0.92
-    half = sorted(cleaned)[: max(3, len(cleaned) // 2)]
+def levels(prices):
+    c = outliers(prices)
+    if len(c) < MIN_SIMILAR:
+        return None, None, None, c
+    med = statistics.median(c)
+    avg = statistics.mean(c)
+    real = percentile(c, REAL_SELL_PERCENTILE)
+    if real is None:
+        return None, None, None, c
+    if real > med:
+        real = med * 0.94
+    half = sorted(c)[: max(2, len(c) // 2)]
     if half:
-        real_sell = min(real_sell, statistics.median(half))
-    return ask_median, round(real_sell), cleaned
+        real = min(real, statistics.median(half))
+    return round(med), round(avg), round(real), c
 
 
-def find_similar_prices(car):
+def find_similar(car):
     make, model, year = car.get("make"), car.get("model"), car.get("year")
     if not make:
         return []
-    query = make
-    if model:
-        query += " " + model.split()[0]
+    q = make + ((" " + model.split()[0]) if model else "")
     if make == "toyota" and model and "camry" in model:
-        query = "toyota camry"
-        if car.get("fuel") == "hybrid":
-            query += " hybrid"
-
-    items = get_ads(q=query, per_page=50)
-    items += get_ads(page=2, q=query, per_page=40)
+        q = "toyota camry"
+    items = get_ads(q=q, per_page=55) + get_ads(page=2, q=q, per_page=40)
     prices = []
-    for item in items:
-        if is_blocked(item.get("title") or "", item.get("description") or ""):
+    for it in items:
+        if blocked(it.get("title") or "", it.get("description") or ""):
             continue
-        c = normalize(item)
+        c = norm(it)
         if not c["price_usd"] or not c["year"]:
             continue
         if str(c["id"]) == str(car.get("id")):
             continue
-        if c["price_usd"] < MIN_PRICE_USD or c["price_usd"] > MAX_PRICE_USD:
+        if not (MIN_PRICE_USD <= c["price_usd"] <= MAX_PRICE_USD):
             continue
-        if year and abs(c["year"] - year) > 1:
+        if year and abs(c["year"] - year) > 2:
             continue
-        if not similar_match(car, c):
+        if not similar_ok(car, c):
             continue
         prices.append(c["price_usd"])
-    return remove_outliers(prices)
+    return outliers(prices)
 
 
-def stage1_rough_reject(car):
-    """Быстрый отсев явно рыночных цен."""
-    make, model = car.get("make"), car.get("model")
-    listing = car.get("price_usd")
-    if not make or not listing:
-        return True
-    query = make + ((" " + model.split()[0]) if model else "")
-    items = get_ads(q=query, per_page=25)
-    prices = []
-    for item in items:
-        if is_blocked(item.get("title") or "", item.get("description") or ""):
-            continue
-        p = price_to_usd(item)
-        if p and MIN_PRICE_USD <= p <= MAX_PRICE_USD:
-            prices.append(p)
-    if len(prices) < 3:
-        return False  # мало данных — не отсекаем на stage1
-    prices = sorted(prices)
-    low = statistics.median(prices[: max(2, len(prices) // 2)])
-    if low <= 0:
-        return True
-    disc = (low - listing) / low
-    return disc < STAGE1_MIN_DISCOUNT
+def money(n):
+    return f"${n:,.0f}".replace(",", " ")
 
 
-def deal_score(discount, potential_profit, n_similar, liq_label, urgent=False):
-    score = 0.0
-    score += min(50, max(0, discount * 100 * 1.5))
-    if potential_profit >= 2500:
-        score += 25
-    elif potential_profit >= 1500:
-        score += 18
-    elif potential_profit >= 1000:
-        score += 12
-    elif potential_profit >= MIN_PROFIT:
-        score += 6
-    else:
-        score -= 8
-    if n_similar >= 8:
-        score += 8
-    elif n_similar >= MIN_SIMILAR_LISTINGS:
-        score += 4
-    if liq_label == "высокая":
-        score += 8
-    elif liq_label == "низкая":
-        score -= 8
-    if urgent:
-        score += 4
-    return int(max(0, min(100, round(score))))
+def frame(listing, med, avg, real, buy):
+    def pct(a, b):
+        return f"{int(round(a / b * 100))}%" if b else "—"
+
+    return (
+        "<pre>"
+        "┌──────────────────────────────┐\n"
+        "│  РАМКИ ЦЕН (USD)             │\n"
+        "├──────────────────────────────┤\n"
+        f"│ Среднее (было)        {money(avg):>8} │\n"
+        f"│ Медиана (было)        {money(med):>8} │\n"
+        f"│ Реал. продажа         {money(real):>8} │\n"
+        f"│ СЕЙЧАС                {money(listing):>8} │\n"
+        f"│ Скупка (вход)         {money(buy):>8} │\n"
+        "└──────────────────────────────┘\n"
+        "</pre>\n"
+        f"От медианы: <b>{pct(listing, med)}</b> · от реала: <b>{pct(listing, real)}</b>\n"
+        f"Выгода к медиане: <b>{money(max(0, med - listing))}</b> · к реалу: <b>{money(max(0, real - listing))}</b>"
+    )
 
 
-def score_fires(discount, potential_profit):
-    if discount >= 0.30 and potential_profit >= 1500:
+def score_of(vs_med, vs_real, gap_med, gap_real, n, liq):
+    s = min(35, max(0, vs_med * 100 * 1.2))
+    s += min(25, max(0, vs_real * 100 * 1.3))
+    if gap_med >= 1500 or gap_real >= 1200:
+        s += 20
+    elif gap_med >= 800 or gap_real >= 600:
+        s += 12
+    elif gap_med >= 400:
+        s += 6
+    if n >= 6:
+        s += 8
+    elif n >= 3:
+        s += 4
+    if liq == "высокая":
+        s += 8
+    elif liq == "низкая":
+        s -= 4
+    return int(max(0, min(100, round(s))))
+
+
+def fires(vs, gap):
+    if vs >= 0.18 and gap >= 1000:
         return "🔥🔥🔥"
-    if discount >= 0.24 and potential_profit >= 1000:
+    if vs >= 0.12 and gap >= 600:
         return "🔥🔥"
     return "🔥"
 
@@ -615,155 +419,132 @@ def analyze(ad, seen):
     ad_id = str(ad.get("id") or "")
     if not ad_id:
         return False
-
-    title = ad.get("title") or ""
-    description = ad.get("description") or ""
-
-    if is_blocked(title, description):
-        seen[ad_id] = price_to_usd(ad)
+    title, desc = ad.get("title") or "", ad.get("description") or ""
+    if blocked(title, desc):
+        seen[ad_id] = price_usd(ad)
         return False
-
-    car = normalize(ad)
+    car = norm(ad)
     listing = car["price_usd"]
-
     if not listing or not car["make"] or not car["year"]:
         seen[ad_id] = listing
         return False
-    if car["year"] < MIN_YEAR:
+    if car["year"] < MIN_YEAR or not (MIN_PRICE_USD <= listing <= MAX_PRICE_USD):
         seen[ad_id] = listing
         return False
-    if listing < MIN_PRICE_USD or listing > MAX_PRICE_USD:
+    fl = floor_price(car["make"], car["model"], car["year"])
+    if listing < fl * 0.85:  # только явный мусор по полу
+        print(f"  floor {listing}<{fl}: {title[:36]}")
+        seen[ad_id] = listing
+        return False
+    if ad_id in seen and seen[ad_id] == listing:
+        return False
+
+    similar = find_similar(car)
+    if len(similar) < MIN_SIMILAR:
+        print(f"  analogs {len(similar)}: {title[:36]}")
         seen[ad_id] = listing
         return False
 
-    floor = sane_min_price(car["make"], car["model"], car["year"])
-    if listing < floor:
-        print(f"  skip floor ${listing}<${floor}: {title[:40]}")
+    med, avg, real, cleaned = levels(similar)
+    if not med or not real:
         seen[ad_id] = listing
         return False
 
-    if ad_id in seen and seen[ad_id] is not None and seen[ad_id] == listing:
-        return False
-
-    if stage1_rough_reject(car):
-        print(f"  stage1 market-price: {title[:40]} | ${listing}")
+    # выше медианы — обычный рынок, не кидаем
+    if listing >= med * 0.98:
+        print(f"  >=median {listing}>={med}: {title[:32]}")
         seen[ad_id] = listing
         return False
 
-    similar = find_similar_prices(car)
-    if len(similar) < MIN_SIMILAR_LISTINGS:
-        print(f"  skip analogs={len(similar)}: {title[:40]}")
+    # слишком дёшево = риск
+    if listing < real * 0.42:
+        print(f"  sus {listing} vs {real}")
         seen[ad_id] = listing
         return False
 
-    ask_median, real_sell, cleaned = calc_price_levels(similar)
-    if not real_sell or not ask_median:
-        print(f"  skip no real_sell: {title[:40]}")
+    m_pct, liq = margin_of(car["make"], car["model"])
+    buy = round(real * (1 - m_pct))
+    vs_med = (med - listing) / med
+    vs_real = (real - listing) / real if real else 0
+    gap_med = med - listing
+    gap_real = real - listing
+
+    is_buy = listing <= buy and gap_real >= MIN_GAP_REAL
+    is_real = vs_real >= MIN_VS_REAL and gap_real >= MIN_GAP_REAL
+    is_med = vs_med >= MIN_VS_MEDIAN and gap_med >= MIN_GAP_MEDIAN
+
+    if not (is_buy or is_real or is_med):
+        print(f"  weak med={med} real={real} now={listing}: {title[:28]}")
         seen[ad_id] = listing
         return False
 
-    # близко к хотелкам = обычная продажа
-    if listing >= ask_median * 0.95:
-        print(f"  skip near-ask ${listing}~${ask_median}: {title[:40]}")
+    sc = score_of(vs_med, max(0, vs_real), gap_med, max(0, gap_real), len(cleaned), liq)
+    if sc < MIN_SCORE:
+        print(f"  score {sc}: {title[:36]}")
         seen[ad_id] = listing
         return False
 
-    if listing < real_sell * 0.45:
-        print(f"  skip suspicious ${listing} vs real ${real_sell}: {title[:40]}")
-        seen[ad_id] = listing
-        return False
-
-    margin_pct, liq_label = get_liquidity_margin_pct(car["make"], car["model"])
-    buy_price = round(real_sell * (1 - margin_pct))
-    discount = (real_sell - listing) / real_sell if real_sell else 0
-    potential_profit = real_sell - listing
-
-    if listing >= buy_price:
-        print(f"  skip >=BUY ${listing}>=${buy_price} (real ${real_sell}): {title[:35]}")
-        seen[ad_id] = listing
-        return False
-    if discount < MIN_DISCOUNT_VS_REAL_SELL:
-        print(f"  skip disc {discount*100:.0f}%: {title[:40]}")
-        seen[ad_id] = listing
-        return False
-    if potential_profit < MIN_PROFIT:
-        print(f"  skip profit ${potential_profit:.0f}: {title[:40]}")
-        seen[ad_id] = listing
-        return False
-
-    urgent = has_urgent_marker(title, description)
-    score = deal_score(discount, potential_profit, len(cleaned), liq_label, urgent)
-    if score < MIN_SCORE:
-        print(f"  skip score {score}: {title[:40]}")
-        seen[ad_id] = listing
-        return False
-
-    fires = score_fires(discount, potential_profit)
+    tag = "СКУПКА" if (is_buy or vs_real >= 0.12) else "НИЖЕ РЫНКА"
+    fr = fires(max(vs_med, max(0, vs_real)), max(gap_med, max(0, gap_real)))
     url = "https://lalafo.kg" + (car["url"] or "")
     photo = None
     if car.get("images"):
-        img0 = car["images"][0]
-        photo = img0.get("original_url") or img0.get("thumbnail_url")
-
-    urgent_mark = "⚡ " if urgent else ""
+        photo = car["images"][0].get("original_url") or car["images"][0].get("thumbnail_url")
     text = (
-        f"🚨 <b>СКУПКА</b> {fires}\n\n"
-        f"{urgent_mark}<b>{title}</b>\n"
-        f"Источник: Lalafo\n"
-        f"Цена: <b>${listing:,.0f}</b>\n"
-        f"Хотелки (медиана): ~${ask_median:,.0f}\n"
-        f"Реал. продажа: ~${real_sell:,.0f}\n"
-        f"Цена скупки: ≤${buy_price:,.0f}\n"
-        f"Запас: ~${potential_profit:,.0f}\n"
-        f"Оценка: {fires} ({score}/100)\n"
-        f"<a href='{url}'>Ссылка</a>"
+        f"🚨 <b>{tag}</b> {fr}\n\n"
+        f"<b>{title}</b>\n"
+        f"Lalafo · {car.get('city')} · аналогов: {len(cleaned)} · {liq}\n\n"
+        f"{frame(listing, med, avg, real, buy)}\n\n"
+        f"Оценка: {fr} ({sc}/100)\n"
+        f"<a href='{url}'>Открыть</a>"
     )
+    if photo and len(text) > 1000:
+        photo = None
     send_telegram(text, photo)
-    print(f"[{datetime.now()}] SEND {fires} {score} | {title[:45]} | ${listing}")
+    print(f"SEND {tag} {sc} | {title[:40]} | ${listing}")
     seen[ad_id] = listing
     return True
 
 
 def main():
-    print("Бот СКУПКА Lalafo запущен...")
-    ok = send_telegram(
-        "🎩 <b>Господин Дияр, бот Lalafo перезапущен и работает.</b>\n"
-        "Ищет реальную скупку (ниже реальной продажи, не «хотелок»)."
+    print("Car bot SOFT start...")
+    # Новый seen-файл опционально — если старый забит, раскомментируй:
+    # if os.path.exists(SEEN_FILE): os.remove(SEEN_FILE)
+    send_telegram(
+        "🎩 <b>Бот машин перезапущен</b>\n"
+        "Фильтры мягкие — кидает ниже рынка и скупку.\n"
+        "В сообщениях рамки цен."
     )
-    if not ok:
-        print("ВНИМАНИЕ: Telegram не отправил стартовое сообщение — проверь токен/chat_id")
-
     seen = load_seen()
-    print(f"seen={len(seen)} | wholesale={WHOLESALE_MARGIN_PCT*100:.0f}% of REAL_SELL")
-    cycles = 0
-    sent_total = 0
+    # если seen огромный — подчистим старое (оставим 500)
+    if len(seen) > 2000:
+        seen = dict(list(seen.items())[-500:])
+        save_seen(seen)
+        print("seen trimmed to", len(seen))
 
+    cycles = total = 0
     while True:
         try:
             cycles += 1
-            print(f"\n[{datetime.now()}] цикл {cycles} | Lalafo...")
+            print(f"\n[{datetime.now()}] #{cycles}")
             ads = fetch_feed()
-            sent_now = 0
-            for ad in ads:
+            now = 0
+            for ad in ads[:100]:
                 try:
                     if analyze(ad, seen):
-                        sent_now += 1
-                        sent_total += 1
+                        now += 1
+                        total += 1
+                        time.sleep(0.8)
                 except Exception as e:
-                    print("analyze err:", e)
+                    print("err", e)
             save_seen(seen)
-            print(f"Цикл OK: проверено {len(ads)}, отправлено {sent_now}, всего {sent_total}")
-
+            print(f"OK лента={len(ads)} кинул={now} всего={total}")
             if cycles % HEARTBEAT_EVERY == 0:
-                send_telegram(
-                    f"💓 Бот жив. Циклов: {cycles}, отправлено скупки: {sent_total}, "
-                    f"в памяти: {len(seen)}"
-                )
-
+                send_telegram(f"💓 Жив. циклов {cycles}, кинул {total}, seen {len(seen)}")
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
-            print("Ошибка цикла:", e)
-            time.sleep(25)
+            print("cycle", e)
+            time.sleep(20)
 
 
 if __name__ == "__main__":
